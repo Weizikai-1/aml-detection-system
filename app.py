@@ -226,10 +226,11 @@ result = st.session_state.analysis_result
 transactions = st.session_state.transactions
 
 # ============================================================
-# Tabs: 检测概览 / 可疑交易 / 资金流向图 / STR报告 / 规则调参 / 历史对比
+# Tabs: 检测概览 / 可疑交易 / 资金流向图 / STR报告 / 规则调参 / 历史对比 / 记忆洞察 / GNN解释 / 系统监控
 # ============================================================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📊 检测概览", "📋 可疑交易", "🕸️ 资金流向图", "📑 STR 报告", "⚙️ 规则调参", "📈 历史对比"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    "📊 检测概览", "📋 可疑交易", "🕸️ 资金流向图", "📑 STR 报告", "⚙️ 规则调参",
+    "📈 历史对比", "🧠 记忆洞察", "🔬 GNN 解释", "🖥️ 系统监控"
 ])
 
 with tab1:
@@ -1281,6 +1282,492 @@ with tab6:
         else:
             if not outliers.get("message"):
                 st.success("✅ 未发现离群运行，所有指标都在正常范围内")
+
+
+# ============================================================
+# Tab 7: 记忆洞察
+# ============================================================
+with tab7:
+    st.subheader("🧠 记忆洞察")
+    st.caption("系统从历史反馈中学习，持续优化检测效果（戒律 M1: 真实数据；M2: 证据完整）")
+
+    try:
+        from tools.memory_manager import get_memory_manager
+        from tools.memory_retriever import get_memory_retriever
+        from tools.reflection_engine import get_reflection_engine
+
+        mm = get_memory_manager()
+        retriever = get_memory_retriever()
+        reflection = get_reflection_engine()
+
+        # 总览卡片
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("案件记忆", mm.get_memory_count("case"))
+        with col2:
+            st.metric("误报记忆", mm.get_memory_count("false_positive"))
+        with col3:
+            st.metric("漏报记忆", mm.get_memory_count("false_negative"))
+        with col4:
+            st.metric("规则统计", mm.get_memory_count("rule_stat"))
+
+        mem_tab1, mem_tab2, mem_tab3, mem_tab4 = st.tabs([
+            "📚 案件记忆", "⚠️ 误报分析", "🔍 漏报分析", "📊 规则表现"
+        ])
+
+        with mem_tab1:
+            st.markdown("#### 历史案件记忆")
+            cases = mm.list_cases(limit=50)
+            if not cases:
+                st.info("暂无案件记忆。分析并标记可疑交易后，系统会自动积累记忆。")
+            else:
+                case_rows = []
+                for c in cases:
+                    case_data = {}
+                    full = mm.get_case(c["id"])
+                    if full:
+                        case_data = full.get("case_data", {})
+                    case_rows.append({
+                        "记忆ID": c["id"],
+                        "创建时间": c["created_at"],
+                        "风险评分": case_data.get("risk_score", "-"),
+                        "交易笔数": case_data.get("transaction_count", "-"),
+                        "衰减权重": round(c["weight"], 3),
+                        "标签": ", ".join(c.get("tags", [])),
+                    })
+                st.dataframe(pd.DataFrame(case_rows), use_container_width=True)
+
+                # 相似案例检索
+                st.markdown("---")
+                st.markdown("#### 🔎 相似案例检索")
+                st.caption("输入案件特征，从历史记忆中找相似案例")
+
+                sim_col1, sim_col2 = st.columns(2)
+                with sim_col1:
+                    sim_amount = st.number_input("交易金额（元）", 0, 10000000, 500000, step=10000)
+                    sim_count = st.slider("交易笔数", 1, 200, 20)
+                with sim_col2:
+                    sim_risk = st.slider("规则风险分", 0, 100, 70)
+                    sim_hits = st.slider("命中规则数", 0, 10, 3)
+
+                if st.button("🔍 检索相似案例", key="search_similar"):
+                    query_case = {
+                        "amount": sim_amount,
+                        "transaction_count": sim_count,
+                        "risk_score": sim_risk,
+                        "hit_rules": [f"R{i:03d}" for i in range(sim_hits)],
+                    }
+                    similar = retriever.search_similar_cases(query_case, top_k=5)
+                    if similar:
+                        st.success(f"找到 {len(similar)} 个相似案例")
+                        sim_rows = []
+                        for s in similar:
+                            sim_rows.append({
+                                "案件ID": s["case_id"],
+                                "相似度": f"{s['similarity']*100:.1f}%",
+                                "加权得分": round(s["weighted_score"], 3),
+                                "衰减权重": round(s["decay_weight"], 3),
+                                "创建时间": s["created_at"],
+                            })
+                        st.dataframe(pd.DataFrame(sim_rows), use_container_width=True)
+                    else:
+                        st.info("未找到足够相似的历史案例")
+
+        with mem_tab2:
+            st.markdown("#### 误报模式分析")
+            st.caption("P2: 不误报 — 分析历史误报，持续优化减少误报")
+
+            fp_result = reflection.analyze_false_positives()
+
+            if fp_result["total_fp"] == 0:
+                st.info("暂无误报记录。收到误报反馈后，系统会自动分析原因。")
+            else:
+                col_fp1, col_fp2 = st.columns(2)
+                with col_fp1:
+                    st.metric("误报总数", fp_result["total_fp"])
+                with col_fp2:
+                    st.metric("涉及规则数", len(fp_result["rule_fp_rate"]))
+
+                st.markdown("##### 主要误报原因")
+                if fp_result["top_reasons"]:
+                    reason_df = pd.DataFrame(fp_result["top_reasons"])
+                    st.bar_chart(reason_df.set_index("reason")["count"])
+
+                st.markdown("##### 优化建议")
+                for i, sug in enumerate(fp_result["suggestions"], 1):
+                    st.info(f"💡 建议 {i}: {sug}")
+
+        with mem_tab3:
+            st.markdown("#### 漏报模式分析")
+            st.caption("P1: 不遗漏 — 分析历史漏报，确保高风险交易不被放过")
+
+            fn_result = reflection.analyze_false_negatives()
+
+            if fn_result["total_fn"] == 0:
+                st.info("暂无漏报记录。收到漏报反馈后，系统会自动分析原因。")
+            else:
+                col_fn1, col_fn2 = st.columns(2)
+                with col_fn1:
+                    st.metric("漏报总数", fn_result["total_fn"])
+                with col_fn2:
+                    st.metric("漏掉规则数", len(fn_result["top_missed_rules"]))
+
+                if fn_result["top_missed_rules"]:
+                    st.markdown("##### 最常漏掉的规则")
+                    missed_df = pd.DataFrame(fn_result["top_missed_rules"])
+                    st.bar_chart(missed_df.set_index("rule")["count"])
+
+                st.markdown("##### 优化建议")
+                for i, sug in enumerate(fn_result["suggestions"], 1):
+                    st.warning(f"⚠️ 建议 {i}: {sug}")
+
+        with mem_tab4:
+            st.markdown("#### 规则历史表现")
+
+            rule_perf = reflection.analyze_rule_performance()
+
+            if rule_perf["rule_count"] == 0:
+                st.info("暂无规则统计数据。积累反馈后，这里会展示各规则的历史表现。")
+            else:
+                col_rp1, col_rp2, col_rp3 = st.columns(3)
+                with col_rp1:
+                    st.metric("规则总数", rule_perf["rule_count"])
+                with col_rp2:
+                    st.metric("表现优秀", len(rule_perf["high_performance"]))
+                with col_rp3:
+                    st.metric("需改进", len(rule_perf["low_performance"]))
+
+                if rule_perf["high_performance"]:
+                    st.markdown("##### ✅ 表现优秀的规则")
+                    hp_df = pd.DataFrame(rule_perf["high_performance"])
+                    st.dataframe(hp_df, use_container_width=True)
+
+                if rule_perf["low_performance"]:
+                    st.markdown("##### ⚠️ 需改进的规则")
+                    lp_df = pd.DataFrame(rule_perf["low_performance"])
+                    st.dataframe(lp_df, use_container_width=True)
+
+                if rule_perf["suggestions"]:
+                    st.markdown("##### 🔧 调优建议")
+                    for i, sug in enumerate(rule_perf["suggestions"], 1):
+                        st.write(f"{i}. {sug}")
+
+    except Exception as e:
+        st.info(f"记忆系统暂不可用: {e}")
+
+
+# ============================================================
+# Tab 8: GNN 可解释性
+# ============================================================
+with tab8:
+    st.subheader("🔬 GNN 图神经网络解释")
+    st.caption("M2: 证据完整 — 解释 GNN 为什么判定某账户可疑")
+
+    try:
+        import torch
+        from tools.gnn_model import is_pyg_available
+        from tools.gnn_explainer import GNNExplainer, AML_FEATURE_NAMES
+
+        if not is_pyg_available():
+            st.warning("PyTorch Geometric 未安装，GNN 功能暂不可用。请运行: pip install torch-geometric")
+        else:
+            from tools.graph_builder import build_graph_from_transactions
+            from tools.gnn_model import create_model
+
+            if not transactions:
+                st.info("请先上传或生成交易数据")
+            else:
+                # 构建图
+                graph = build_graph_from_transactions(transactions)
+                num_nodes = graph["num_accounts"]
+                num_edges = len(graph["edges"])
+
+                col_gnn1, col_gnn2, col_gnn3 = st.columns(3)
+                with col_gnn1:
+                    st.metric("账户节点数", num_nodes)
+                with col_gnn2:
+                    st.metric("交易边数", num_edges)
+                with col_gnn3:
+                    # 自动选型
+                    from tools.gnn_model import select_model_by_size
+                    rec_model = select_model_by_size(num_nodes, num_edges)
+                    st.metric("推荐模型", rec_model.upper())
+
+                # 模型选择
+                model_type = st.selectbox(
+                    "选择 GNN 模型",
+                    ["auto", "gcn", "gat", "graphsage"],
+                    format_func=lambda x: {
+                        "auto": "自动选型",
+                        "gcn": "GCN - 图卷积网络（中图，速度快）",
+                        "gat": "GAT - 图注意力（小图，可解释性好）",
+                        "graphsage": "GraphSAGE - 图采样（大图，效率高）",
+                    }[x],
+                    index=0,
+                )
+
+                # 特征张量
+                x = torch.tensor(graph["features"], dtype=torch.float)
+                edge_index = torch.tensor(graph["edge_index"], dtype=torch.long).t().contiguous() if graph["edge_index"] else torch.zeros((2, 0), dtype=torch.long)
+
+                if num_nodes < 2:
+                    st.info("账户数量太少，无法进行 GNN 分析")
+                else:
+                    # 生成伪标签（用规则风险分 50 以上作为可疑标签）
+                    labels = (x[:, 5] > 0.5).long()
+
+                    if st.button("🧠 训练并解释", key="train_gnn"):
+                        with st.spinner("正在训练 GNN 模型并生成解释..."):
+                            mtype = model_type if model_type != "auto" else rec_model
+                            model = create_model(model_type=mtype, in_channels=6, hidden_channels=64)
+                            model.train()
+
+                            optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+                            for epoch in range(50):
+                                model.train()
+                                optimizer.zero_grad()
+                                out = model(x, edge_index)
+                                loss = torch.nn.functional.cross_entropy(out, labels)
+                                loss.backward()
+                                optimizer.step()
+
+                            # 预测
+                            model.eval()
+                            with torch.no_grad():
+                                probs = model.predict(x, edge_index).numpy()
+
+                            # 排序，取风险最高的账户
+                            accounts = list(graph["account_to_idx"].keys())
+                            account_scores = list(zip(accounts, probs))
+                            account_scores.sort(key=lambda x: x[1], reverse=True)
+
+                            st.success(f"模型训练完成（{mtype.upper()}）")
+
+                            # 高风险账户列表
+                            st.markdown("#### 📊 账户风险排名（Top 10）")
+                            top_df = pd.DataFrame([
+                                {"排名": i+1, "账户": acc, "可疑概率": f"{p*100:.1f}%", "风险等级": "高" if p > 0.7 else "中" if p > 0.4 else "低"}
+                                for i, (acc, p) in enumerate(account_scores[:10])
+                            ])
+                            st.dataframe(top_df, use_container_width=True)
+
+                            # 选择账户查看解释
+                            st.markdown("---")
+                            st.markdown("#### 🔍 选择账户查看详细解释")
+                            top_accounts = [acc for acc, _ in account_scores[:10]]
+                            selected_account = st.selectbox("选择账户", top_accounts, key="explain_account")
+
+                            if selected_account:
+                                node_idx = graph["account_to_idx"][selected_account]
+                                explainer = GNNExplainer(model)
+
+                                # 注意力权重（GAT 专用）
+                                attn_data = None
+                                if mtype == "gat":
+                                    with torch.no_grad():
+                                        _, attn = model(x, edge_index, return_attention_weights=True)
+                                    attn_data = attn
+
+                                # 综合解释
+                                explanation = explainer.explain_prediction(
+                                    x, edge_index,
+                                    node_index=node_idx,
+                                    attention_data=attn_data,
+                                    feature_names=AML_FEATURE_NAMES,
+                                    account_names={i: acc for acc, i in graph["account_to_idx"].items()},
+                                )
+
+                                st.markdown(f"**解释结果：**")
+                                st.info(explanation["explanation_text"])
+
+                                col_exp1, col_exp2 = st.columns(2)
+
+                                with col_exp1:
+                                    st.markdown("##### 特征重要性")
+                                    feat_df = pd.DataFrame(explanation["top_features"])
+                                    if not feat_df.empty:
+                                        st.bar_chart(feat_df.set_index("feature_name")["importance_ratio"])
+
+                                with col_exp2:
+                                    st.markdown("##### 重要邻居")
+                                    if explanation["top_neighbors"]:
+                                        neighbor_rows = []
+                                        for n in explanation["top_neighbors"][:5]:
+                                            n_idx = n.get("node_index", n.get("neighbor_index", 0))
+                                            n_acc = list(graph["account_to_idx"].keys())[
+                                                list(graph["account_to_idx"].values()).index(n_idx)
+                                            ] if n_idx < len(accounts) else f"节点{n_idx}"
+                                            score = n.get("attention_score", n.get("importance_ratio", 0))
+                                            neighbor_rows.append({
+                                                "邻居账户": n_acc,
+                                                "重要性": round(score, 4),
+                                            })
+                                        st.dataframe(pd.DataFrame(neighbor_rows), use_container_width=True)
+                                    else:
+                                        st.info("暂无邻居数据")
+
+    except ImportError as e:
+        st.info(f"GNN 功能暂不可用: {e}")
+    except Exception as e:
+        st.error(f"GNN 分析出错: {e}")
+
+
+# ============================================================
+# Tab 9: 系统监控
+# ============================================================
+with tab9:
+    st.subheader("🖥️ 系统监控")
+    st.caption("实时监控系统状态、性能指标和资源使用")
+
+    import time
+    import platform
+    import sys
+
+    # 系统信息
+    col_sys1, col_sys2, col_sys3, col_sys4 = st.columns(4)
+    with col_sys1:
+        st.metric("Python 版本", f"{sys.version_info.major}.{sys.version_info.minor}")
+    with col_sys2:
+        st.metric("操作系统", platform.system())
+    with col_sys3:
+        st.metric("处理器", platform.machine())
+    with col_sys4:
+        st.metric("当前时间", pd.Timestamp.now().strftime("%H:%M:%S"))
+
+    mon_tab1, mon_tab2, mon_tab3 = st.tabs(["📊 性能指标", "🧪 健康检查", "📦 依赖版本"])
+
+    with mon_tab1:
+        st.markdown("#### 性能指标")
+
+        # 模拟性能数据（基于实际分析结果）
+        if result and transactions:
+            step_times = result.get("step_times", {})
+            total_time = sum(step_times.values()) if step_times else 0
+
+            col_perf1, col_perf2, col_perf3 = st.columns(3)
+            with col_perf1:
+                st.metric("总耗时", f"{total_time:.2f}s" if total_time else "N/A")
+            with col_perf2:
+                st.metric("交易数", len(transactions))
+            with col_perf3:
+                tps = len(transactions) / total_time if total_time > 0 else 0
+                st.metric("吞吐量", f"{tps:.1f} tx/s" if tps else "N/A")
+
+            if step_times:
+                st.markdown("##### 各阶段耗时")
+                step_df = pd.DataFrame([
+                    {"阶段": k.replace("_", " ").title(), "耗时(秒)": round(v, 3)}
+                    for k, v in step_times.items()
+                ])
+                st.bar_chart(step_df.set_index("阶段")["耗时(秒)"])
+
+                # 效率分析
+                st.markdown("##### 效率分析")
+                if tps > 100:
+                    st.success(f"✅ 性能优秀，吞吐量 {tps:.1f} tx/s，满足生产要求")
+                elif tps > 30:
+                    st.info(f"ℹ️ 性能良好，吞吐量 {tps:.1f} tx/s")
+                else:
+                    st.warning(f"⚠️ 吞吐量偏低，建议优化慢节点（如 LLM 调用）")
+
+            # 内存使用
+            st.markdown("---")
+            st.markdown("##### 内存使用估算")
+            est_mem = (len(transactions) * 2) / 1024  # 假设每笔交易约 2KB
+            st.info(f"当前数据约占用 {est_mem:.2f} MB 内存")
+            st.caption("注：为估算值，实际占用取决于数据复杂度和缓存")
+
+        else:
+            st.info("暂无分析数据，请先上传并分析交易")
+
+    with mon_tab2:
+        st.markdown("#### 健康检查")
+
+        checks = []
+
+        # 1. 规则引擎
+        try:
+            from agents.rule_engine import RuleEngine
+            engine = RuleEngine()
+            checks.append({"组件": "规则引擎", "状态": "✅ 正常", "详情": f"{len(engine.rules)} 条规则已加载"})
+        except Exception as e:
+            checks.append({"组件": "规则引擎", "状态": "❌ 异常", "详情": str(e)})
+
+        # 2. 数据存储
+        try:
+            from config import DATA_DIR
+            import os
+            if os.path.isdir(DATA_DIR):
+                checks.append({"组件": "数据目录", "状态": "✅ 正常", "详情": DATA_DIR})
+            else:
+                checks.append({"组件": "数据目录", "状态": "⚠️ 不存在", "详情": DATA_DIR})
+        except Exception as e:
+            checks.append({"组件": "数据目录", "状态": "❌ 异常", "详情": str(e)})
+
+        # 3. 记忆系统
+        try:
+            from tools.memory_manager import get_memory_manager
+            mm = get_memory_manager()
+            total = mm.get_memory_count()
+            checks.append({"组件": "记忆系统", "状态": "✅ 正常", "详情": f"{total} 条记忆"})
+        except Exception as e:
+            checks.append({"组件": "记忆系统", "状态": "⚠️ 不可用", "详情": str(e)})
+
+        # 4. LLM
+        try:
+            llm_key = __import__("os").environ.get("DEEPSEEK_API_KEY", "")
+            if llm_key:
+                checks.append({"组件": "LLM 服务", "状态": "✅ 已配置", "详情": "DeepSeek API Key 已设置"})
+            else:
+                checks.append({"组件": "LLM 服务", "状态": "⚠️ 未配置", "详情": "将使用降级模式（规则引擎）"})
+        except Exception as e:
+            checks.append({"组件": "LLM 服务", "状态": "❌ 异常", "详情": str(e)})
+
+        # 5. GNN
+        try:
+            from tools.gnn_model import is_pyg_available
+            if is_pyg_available():
+                checks.append({"组件": "GNN 模型", "状态": "✅ 可用", "详情": "PyTorch Geometric 已安装"})
+            else:
+                checks.append({"组件": "GNN 模型", "状态": "⚠️ 未安装", "详情": "pip install torch-geometric"})
+        except Exception as e:
+            checks.append({"组件": "GNN 模型", "状态": "❌ 异常", "详情": str(e)})
+
+        st.dataframe(pd.DataFrame(checks), use_container_width=True)
+
+        # 整体状态
+        healthy = sum(1 for c in checks if "✅" in c["状态"])
+        if healthy == len(checks):
+            st.success("✅ 所有组件运行正常")
+        elif healthy >= len(checks) * 0.7:
+            st.info(f"ℹ️ 系统基本正常，{healthy}/{len(checks)} 组件可用")
+        else:
+            st.warning(f"⚠️ 系统存在异常，{healthy}/{len(checks)} 组件可用")
+
+    with mon_tab3:
+        st.markdown("#### 核心依赖版本")
+
+        deps = [
+            {"包": "Python", "版本": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"},
+            {"包": "Streamlit", "版本": __import__("streamlit").__version__ if "streamlit" in sys.modules else "N/A"},
+            {"包": "Pandas", "版本": pd.__version__},
+            {"包": "PyTorch", "版本": __import__("torch").__version__ if __import__("importlib").util.find_spec("torch") else "未安装"},
+        ]
+
+        # 检查可选依赖
+        try:
+            import torch_geometric
+            deps.append({"包": "PyG", "版本": torch_geometric.__version__})
+        except ImportError:
+            deps.append({"包": "PyG", "版本": "未安装"})
+
+        try:
+            import langgraph
+            deps.append({"包": "LangGraph", "版本": langgraph.__version__ if hasattr(langgraph, "__version__") else "已安装"})
+        except ImportError:
+            deps.append({"包": "LangGraph", "版本": "未安装"})
+
+        st.dataframe(pd.DataFrame(deps), use_container_width=True)
 
 
 # 底部

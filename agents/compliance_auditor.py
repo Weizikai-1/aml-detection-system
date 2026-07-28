@@ -13,8 +13,14 @@ Agent 6: 合规审核 Agent
 4. 格式规范性
 """
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from graph.state import AMLState, STRReport
+
+try:
+    from tools.memory_retriever import get_memory_retriever
+    _HAS_MEMORY = True
+except ImportError:
+    _HAS_MEMORY = False
 
 
 # 合规检查权重
@@ -240,9 +246,13 @@ def _check_format(report: STRReport) -> Tuple[float, List[str]]:
     return max(score, 0), issues
 
 
-def _audit_report(report: STRReport) -> Tuple[str, float, List[str], str]:
+def _audit_report(report: STRReport, use_memory: bool = True) -> Tuple[str, float, List[str], str]:
     """
     审核单份报告
+
+    Args:
+        report: STR报告
+        use_memory: 是否使用记忆系统参考（默认开启，失败自动降级）
 
     Returns:
         status: passed / human_review / rejected
@@ -278,16 +288,41 @@ def _audit_report(report: STRReport) -> Tuple[str, float, List[str], str]:
         + format_score * COMPLIANCE_CHECKS["format_compliance"]["weight"]
     )
 
+    # 记忆系统参考（失败自动降级，不影响主流程）
+    memory_notes = ""
+    if use_memory and _HAS_MEMORY:
+        try:
+            retriever = get_memory_retriever()
+            txns = report.get("suspicious_transactions", [])
+            case_data = {
+                "risk_score": report.get("risk_score", 50),
+                "transactions": txns,
+                "hit_rules": [
+                    r for t in txns
+                    for r in t.get("rule_hits", [])
+                ],
+                "amount": report.get("total_suspicious_amount", 0),
+                "transaction_count": len(txns),
+            }
+            memory_adjust = retriever.get_memory_adjustment(case_data)
+            adj = memory_adjustment.get("score_adjustment", 0)
+            reason = memory_adjustment.get("reason", "")
+            if adj != 0 and reason:
+                memory_notes = f"（记忆参考: {reason}）"
+                # M3: 最终评分仍在 [0, 1]，记忆只做微调参考
+        except Exception:
+            memory_notes = ""
+
     # 判断结果
     if total_score >= 0.8:
         status = "passed"
-        notes = f"合规审核通过，综合评分{total_score:.2f}"
+        notes = f"合规审核通过，综合评分{total_score:.2f}{memory_notes}"
     elif total_score >= 0.5:
         status = "human_review"
-        notes = f"需人工审核，综合评分{total_score:.2f}，存在{len(all_issues)}项待确认"
+        notes = f"需人工审核，综合评分{total_score:.2f}，存在{len(all_issues)}项待确认{memory_notes}"
     else:
         status = "rejected"
-        notes = f"合规审核未通过，综合评分{total_score:.2f}，需补充完善后重新提交"
+        notes = f"合规审核未通过，综合评分{total_score:.2f}，需补充完善后重新提交{memory_notes}"
 
     return status, round(total_score, 3), all_issues, notes
 

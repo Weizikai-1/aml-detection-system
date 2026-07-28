@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv
 
-from .gnn_model import create_model, MoneyLaunderingGCN
+from .gnn_model import create_model, select_model_by_size, is_pyg_available
 
 
 def _build_node_features(
@@ -168,9 +168,10 @@ def train_gnn(
     lr: float = 0.01,
     verbose: bool = True,
     device: str = "cpu",
-) -> tuple[MoneyLaunderingGCN, dict]:
+    model_type: str = "auto",
+) -> tuple:
     """
-    训练 GCN 节点分类器
+    训练 GNN 节点分类器
 
     Args:
         data: PyG Data 对象
@@ -178,11 +179,18 @@ def train_gnn(
         lr: 学习率
         verbose: 是否打印训练日志
         device: 计算设备
+        model_type: 模型类型（auto/gcn/gat/graphsage，auto自动选型）
 
     Returns:
         (训练好的模型, 训练指标字典)
     """
     data = data.to(device)
+
+    # 自动选型
+    if model_type == "auto":
+        model_type = select_model_by_size(data.num_nodes, data.edge_index.size(1))
+    if verbose:
+        print(f"  模型类型: {model_type}")
 
     # 8:2 划分训练/验证集
     n = data.num_nodes
@@ -193,7 +201,7 @@ def train_gnn(
     train_mask[perm[:split]] = True
     val_mask[perm[split:]] = True
 
-    model = create_model(in_channels=data.x.size(1)).to(device)
+    model = create_model(model_type=model_type, in_channels=data.x.size(1)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
 
     metrics = {"train_losses": [], "val_acc": [], "final_train_acc": 0.0, "final_val_acc": 0.0, "epochs": epochs}
@@ -248,7 +256,7 @@ def train_gnn(
 
 
 def infer_gnn(
-    model: MoneyLaunderingGCN,
+    model,
     data: Data,
     device: str = "cpu",
 ) -> dict:
@@ -290,3 +298,48 @@ def infer_gnn(
     }
 
     return {"scores": scores, "high_risk": high_risk, "stats": stats}
+
+
+class GNNPredictor:
+    """
+    GNN 预测器 — 更易用的封装
+
+    封装训练和推理，提供统一接口
+    """
+
+    def __init__(self, model_type: str = "auto"):
+        self.model_type = model_type
+        self.model = None
+        self.data = None
+        self.account_to_idx = None
+
+    def train(self, x, edge_index, labels, epochs=50, lr=0.01, verbose=False):
+        """训练模型"""
+        from torch_geometric.data import Data
+
+        data = Data(x=x, edge_index=edge_index, y=labels, num_nodes=x.size(0))
+        data.account_to_idx = {}
+
+        self.model, metrics = train_gnn(
+            data, epochs=epochs, lr=lr, verbose=verbose,
+            model_type=self.model_type
+        )
+        self.data = data
+        return metrics
+
+    def predict(self, x, edge_index):
+        """预测并返回概率列表"""
+        if self.model is None:
+            return [0.5] * x.size(0)
+
+        from torch_geometric.data import Data
+        data = Data(x=x, edge_index=edge_index, num_nodes=x.size(0))
+        data.account_to_idx = {i: i for i in range(x.size(0))}
+
+        result = infer_gnn(self.model, data)
+        scores_dict = result["scores"]
+        return [scores_dict.get(i, 0.5) for i in range(x.size(0))]
+
+    def is_available(self) -> bool:
+        """检查 GNN 是否可用"""
+        return is_pyg_available()

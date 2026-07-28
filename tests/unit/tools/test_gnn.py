@@ -13,7 +13,7 @@ import torch
 import numpy as np
 from torch_geometric.data import Data
 
-from tools.gnn_model import MoneyLaunderingGCN, create_model
+from tools.gnn_model import MoneyLaunderingGCN, create_model, is_pyg_available
 from tools.gnn_trainer import (
     _build_node_features,
     _build_labels,
@@ -214,7 +214,8 @@ class TestTrainGNN:
     def test_training_runs(self):
         """训练能正常运行并返回模型"""
         model, metrics = train_gnn(self.data, epochs=100, verbose=False)
-        assert isinstance(model, MoneyLaunderingGCN)
+        assert hasattr(model, "forward")
+        assert hasattr(model, "model_type")
         assert "final_train_acc" in metrics
         assert "final_val_acc" in metrics
         assert len(metrics["train_losses"]) == 100

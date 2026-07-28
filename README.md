@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-1298%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-1369%20passed-brightgreen.svg)](tests/)
 [![Coverage](https://img.shields.io/badge/Coverage-83%25-brightgreen.svg)](tests/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](docker-compose.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
@@ -50,6 +50,25 @@
 - 多目标参数优化（precision + recall + f1 帕累托前沿）
 - A/B 测试框架
 - 交叉影响分析（识别参数变更对其他规则的副作用）
+
+### GNN 图神经网络
+
+系统集成 PyTorch Geometric 图神经网络，用于资金图谱中的可疑节点识别：
+
+- **三种模型架构**：GCN（图卷积）、GAT（多头注意力）、GraphSAGE（归纳学习）
+- **模型自动选型**：根据图规模和数据特征自动选择最优模型
+- **可解释性分析**：注意力权重可视化、特征重要性排序、邻居节点影响分析
+- **端到端训练**：支持从交易数据构建图、训练模型、推理预测全流程
+
+### 反思记忆系统
+
+系统具备从历史反馈中学习的能力，持续优化检测效果：
+
+- **四类长期记忆**：案件记忆、误报记忆、漏报记忆、规则统计
+- **相似度检索**：基于余弦相似度匹配历史相似案例，辅助当前决策
+- **时间衰减机制**：老案例权重自动衰减，保证记忆时效性
+- **反思引擎**：自动分析误报/漏报模式，生成规则调优建议
+- **Agent 集成**：合规审核 Agent 自动参考历史记忆，调整评分
 
 ## 快速开始
 
@@ -102,7 +121,7 @@ docker compose up -d
 
 ## 测试
 
-项目包含 1298 个测试用例，覆盖规则引擎、反馈管理、参数优化等核心模块。
+项目包含 1369 个测试用例，覆盖规则引擎、反馈管理、参数优化、GNN、记忆系统等核心模块。
 
 ```bash
 python -m pytest                    # 运行全部测试

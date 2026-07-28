@@ -31,6 +31,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 
 # API 限流
 try:
@@ -58,6 +59,58 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI 生命周期管理器（替代已废弃的 @app.on_event）
+    
+    启动时执行初始化，关闭时执行清理
+    """
+    logger.info("[API] AML-Agent API 服务启动中...")
+    
+    try:
+        from api.log_desensitize import patch_logger
+        patch_logger(None)
+        logger.info("[API] 日志脱敏初始化完成（全模块覆盖）")
+        
+        from api.audit_log import audit_logger, OperationType
+        audit_logger.log_success(
+            operation_type=OperationType.SYSTEM,
+            action="API服务启动",
+            details={"version": "1.2.0"},
+        )
+        logger.info("[API] 审计日志初始化完成")
+        
+        from api.database import init_db, create_tables
+        db_url = os.getenv("DATABASE_URL", "")
+        if db_url:
+            connected = init_db(db_url)
+            if connected:
+                create_tables()
+                logger.info("[API] PostgreSQL 数据库连接成功")
+            else:
+                logger.info("[API] 使用 JSON 文件模式")
+        else:
+            logger.info("[API] 使用 JSON 文件模式")
+        
+        from api.dual_write import init_dual_write
+        init_dual_write()
+        logger.info("[API] 双写机制初始化完成")
+        
+        from api.monitor import init_monitor
+        init_monitor()
+        logger.info("[API] 监控指标初始化完成")
+        
+        logger.info("[API] AML-Agent API 服务启动完成")
+    except Exception as e:
+        logger.error(f"[API] 启动初始化失败: {e}", exc_info=True)
+    
+    yield
+    
+    logger.info("[API] AML-Agent API 服务关闭中...")
+
 
 # 创建 FastAPI 应用
 _app_env = os.getenv("APP_ENV", "development")
@@ -101,6 +154,7 @@ AML-Agent 是一个基于多Agent架构的反洗钱分析系统，提供完整�
 - 日志脱敏处理
 """,
     version="1.2.0",
+    lifespan=lifespan,
     docs_url=None if _app_env == "production" else "/docs",
     redoc_url=None if _app_env == "production" else "/redoc",
     openapi_tags=[
@@ -198,56 +252,6 @@ async def request_log_middleware(request: Request, call_next):
         record_request(request.url.path, request.method, 500, duration)
         
         raise
-
-# 初始化数据库连接
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时执行"""
-    logger.info("[API] AML-Agent API 服务启动中...")
-    
-    # 初始化日志脱敏（L4 修复：覆盖根logger，所有模块日志都脱敏）
-    from api.log_desensitize import patch_logger
-    patch_logger(None)
-    logger.info("[API] 日志脱敏初始化完成（全模块覆盖）")
-    
-    # 初始化审计日志
-    from api.audit_log import audit_logger, OperationType
-    audit_logger.log_success(
-        operation_type=OperationType.SYSTEM,
-        action="API服务启动",
-        details={"version": "1.0.0"},
-    )
-    logger.info("[API] 审计日志初始化完成")
-    
-    # 初始化数据库连接
-    from api.database import init_db, create_tables
-    db_url = os.getenv("DATABASE_URL", "")
-    if db_url:
-        connected = init_db(db_url)
-        if connected:
-            create_tables()
-            logger.info("[API] PostgreSQL 数据库连接成功")
-        else:
-            logger.info("[API] 使用 JSON 文件模式")
-    else:
-        logger.info("[API] 使用 JSON 文件模式")
-    
-    # 初始化双写机制
-    from api.dual_write import init_dual_write
-    init_dual_write()
-    logger.info("[API] 双写机制初始化完成")
-    
-    # 初始化监控
-    from api.monitor import init_monitor
-    init_monitor()
-    logger.info("[API] 监控指标初始化完成")
-    
-    logger.info("[API] AML-Agent API 服务启动完成")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时执行"""
-    logger.info("[API] AML-Agent API 服务关闭中...")
 
 # ===== 健康检查端点 =====
 @app.get("/health", tags=["系统"])

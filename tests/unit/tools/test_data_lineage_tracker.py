@@ -425,14 +425,13 @@ def test_verify_integrity_missing_required_stage(tracker, sample_state):
 # ============================================================
 # 异常隔离（戒律 P4）
 # ============================================================
-def test_record_lineage_does_not_raise_on_disk_error(tracker, sample_state, capsys):
+def test_record_lineage_does_not_raise_on_disk_error(tracker, sample_state, caplog):
     """磁盘写入失败时不抛异常"""
     with patch("builtins.open", side_effect=OSError("disk full")):
         result = tracker.record_lineage("exec_001", sample_state)
     # 应返回 None 而非抛异常
     assert result is None
-    out = capsys.readouterr().out
-    assert "记录失败" in out or "血缘追踪" in out
+    assert "血缘追踪" in caplog.text
 
 
 def test_query_lineage_does_not_raise_on_corrupt_index(tracker, sample_state):

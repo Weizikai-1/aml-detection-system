@@ -15,16 +15,17 @@
 - P4: 记录失败 try/except 不阻塞主流程
 """
 import json
+import logging
 import os
 import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-# 模块版本（戒律 M4: 可追溯）
+logger = logging.getLogger(__name__)
+
 __LINEAGE_TRACKER_VERSION__ = "1.0.0"
 
-# 默认保留天数
 _DEFAULT_RETAIN_DAYS = 90
 
 
@@ -193,7 +194,7 @@ class DataLineageTracker:
 
         except Exception as e:
             # 戒律 P4: 不抛异常
-            print(f"  [血缘追踪] 记录失败: {e}")
+            logger.error("[血缘追踪] 记录失败: %s", e)
             return None
 
     # ============================================================
@@ -220,7 +221,7 @@ class DataLineageTracker:
                         return self._load_record(lid)
             return None
         except Exception as e:
-            print(f"  [血缘追踪] 查询失败: {e}")
+            logger.error("[血缘追踪] 查询失败: %s", e)
             return None
 
     def query_by_lineage_id(self, lineage_id: str) -> Optional[Dict[str, Any]]:
@@ -252,7 +253,7 @@ class DataLineageTracker:
                 return self._load_record(lid)
             return None
         except Exception as e:
-            print(f"  [血缘追踪] 报告追溯失败: {e}")
+            logger.error("[血缘追踪] 报告追溯失败: %s", e)
             return None
 
     def trace_transaction(self, transaction_id: str) -> List[Dict[str, Any]]:
@@ -281,7 +282,7 @@ class DataLineageTracker:
                     results.append(rec)
             return results
         except Exception as e:
-            print(f"  [血缘追踪] 交易追溯失败: {e}")
+            logger.error("[血缘追踪] 交易追溯失败: %s", e)
             return []
 
     def list_lineages(self, limit: int = 20) -> List[Dict[str, Any]]:
@@ -305,7 +306,7 @@ class DataLineageTracker:
             )
             return sorted_entries[:limit]
         except Exception as e:
-            print(f"  [血缘追踪] 列表查询失败: {e}")
+            logger.error("[血缘追踪] 列表查询失败: %s", e)
             return []
 
     # ============================================================
@@ -417,7 +418,7 @@ class DataLineageTracker:
 
             return removed_count
         except Exception as e:
-            print(f"  [血缘追踪] 清理失败: {e}")
+            logger.error("[血缘追踪] 清理失败: %s", e)
             return 0
 
     # ============================================================
@@ -716,7 +717,7 @@ class DataLineageTracker:
             with open(self.index_path, "w", encoding="utf-8") as f:
                 json.dump(index, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"  [血缘追踪] 索引保存失败: {e}")
+            logger.error("[血缘追踪] 索引保存失败: %s", e)
 
     def _update_index(self, record: Dict[str, Any]) -> None:
         """更新主索引"""
@@ -735,7 +736,7 @@ class DataLineageTracker:
             index["updated_at"] = _now_iso()
             self._save_index(index)
         except Exception as e:
-            print(f"  [血缘追踪] 索引更新失败: {e}")
+            logger.error("[血缘追踪] 索引更新失败: %s", e)
 
     def _write_index_entry(self, path: str, lineage_id: str,
                            execution_id: str, timestamp: str) -> None:
@@ -749,7 +750,7 @@ class DataLineageTracker:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(entry, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"  [血缘追踪] 报告索引写入失败: {e}")
+            logger.error("[血缘追踪] 报告索引写入失败: %s", e)
 
     def _append_transaction_index(self, transaction_id: str,
                                    lineage_id: str, execution_id: str,
@@ -776,7 +777,7 @@ class DataLineageTracker:
                 with open(idx_path, "w", encoding="utf-8") as f:
                     json.dump(existing, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"  [血缘追踪] 交易索引追加失败: {e}")
+            logger.error("[血缘追踪] 交易索引追加失败: %s", e)
 
     def _load_record(self, lineage_id: str) -> Optional[Dict[str, Any]]:
         """加载单条血缘记录"""

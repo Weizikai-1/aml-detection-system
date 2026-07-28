@@ -3,8 +3,100 @@ LLM 客户端封装
 统一管理 DeepSeek API 调用
 """
 import asyncio
+import hashlib
+import json
+import logging
+import os
+import time
+from typing import Optional, Dict, Any
+
 from langchain_openai import ChatOpenAI
+from langchain_core.globals import set_llm_cache
+from langchain_core.cache import InMemoryCache
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LLM_CONFIG
+from config.cache import CACHE_CONFIG
+
+logger = logging.getLogger(__name__)
+
+if CACHE_CONFIG.get("llm_cache_enabled", False):
+    set_llm_cache(InMemoryCache())
+    logger.info("[LLM] 内存缓存已启用")
+
+
+class LlmFileCache:
+    """本地文件缓存（作为内存缓存的持久化补充）"""
+
+    def __init__(self, cache_dir: str = None, expire_hours: int = 24):
+        if cache_dir is None:
+            cache_dir = os.path.join("data", "llm_cache")
+        self.cache_dir = cache_dir
+        self.expire_hours = expire_hours
+        os.makedirs(cache_dir, exist_ok=True)
+
+    def _get_key(self, prompt: str, system_prompt: str = "") -> str:
+        """生成缓存键"""
+        content = f"{system_prompt}|||{prompt}"
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
+
+    def get(self, prompt: str, system_prompt: str = "") -> Optional[str]:
+        """获取缓存"""
+        key = self._get_key(prompt, system_prompt)
+        path = os.path.join(self.cache_dir, f"{key}.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if time.time() - data.get("timestamp", 0) > self.expire_hours * 3600:
+                os.remove(path)
+                return None
+            return data.get("response")
+        except Exception:
+            return None
+
+    def set(self, prompt: str, system_prompt: str, response: str) -> None:
+        """设置缓存"""
+        key = self._get_key(prompt, system_prompt)
+        path = os.path.join(self.cache_dir, f"{key}.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                    "system_prompt": system_prompt[:50] + "..." if len(system_prompt) > 50 else system_prompt,
+                    "response": response,
+                    "timestamp": time.time(),
+                    "expire_hours": self.expire_hours,
+                }, f, ensure_ascii=False)
+        except Exception as e:
+            logger.error("[LLM] 缓存写入失败: %s", e)
+
+    def clear(self) -> int:
+        """清理过期缓存"""
+        count = 0
+        for f in os.listdir(self.cache_dir):
+            path = os.path.join(self.cache_dir, f)
+            if f.endswith(".json"):
+                try:
+                    with open(path, "r", encoding="utf-8") as fp:
+                        data = json.load(fp)
+                    if time.time() - data.get("timestamp", 0) > self.expire_hours * 3600:
+                        os.remove(path)
+                        count += 1
+                except Exception:
+                    os.remove(path)
+                    count += 1
+        return count
+
+
+_file_cache = None
+
+def get_file_cache() -> LlmFileCache:
+    """获取文件缓存实例"""
+    global _file_cache
+    if _file_cache is None:
+        expire_hours = CACHE_CONFIG.get("llm_cache_expire_hours", 24)
+        _file_cache = LlmFileCache(expire_hours=expire_hours)
+    return _file_cache
 
 
 def get_llm(temperature: float = None) -> ChatOpenAI:
@@ -38,6 +130,13 @@ def invoke_llm(prompt: str, system_prompt: str = "") -> str:
     Returns:
         LLM 响应文本
     """
+    if CACHE_CONFIG.get("llm_cache_enabled", False):
+        file_cache = get_file_cache()
+        cached = file_cache.get(prompt, system_prompt)
+        if cached is not None:
+            logger.debug("[LLM] 命中文件缓存")
+            return cached
+
     llm = get_llm()
     messages = []
     if system_prompt:
@@ -47,9 +146,13 @@ def invoke_llm(prompt: str, system_prompt: str = "") -> str:
     for attempt in range(LLM_CONFIG["retry_times"]):
         try:
             response = llm.invoke(messages)
-            return response.content
+            result = response.content
+            if CACHE_CONFIG.get("llm_cache_enabled", False):
+                file_cache = get_file_cache()
+                file_cache.set(prompt, system_prompt, result)
+            return result
         except Exception as e:
-            print(f"LLM 调用失败(第{attempt+1}次): {e}")
+            logger.error("LLM 调用失败(第%d次): %s", attempt + 1, e)
             if attempt == LLM_CONFIG["retry_times"] - 1:
                 raise
     return ""
@@ -67,6 +170,13 @@ async def ainvoke_llm(prompt: str, system_prompt: str = "", semaphore: asyncio.S
     Returns:
         LLM 响应文本
     """
+    if CACHE_CONFIG.get("llm_cache_enabled", False):
+        file_cache = get_file_cache()
+        cached = file_cache.get(prompt, system_prompt)
+        if cached is not None:
+            logger.debug("[LLM] 命中文件缓存(异步)")
+            return cached
+
     async def _call():
         llm = get_llm()
         messages = []
@@ -77,9 +187,13 @@ async def ainvoke_llm(prompt: str, system_prompt: str = "", semaphore: asyncio.S
         for attempt in range(LLM_CONFIG["retry_times"]):
             try:
                 response = await llm.ainvoke(messages)
-                return response.content
+                result = response.content
+                if CACHE_CONFIG.get("llm_cache_enabled", False):
+                    file_cache = get_file_cache()
+                    file_cache.set(prompt, system_prompt, result)
+                return result
             except Exception as e:
-                print(f"LLM 异步调用失败(第{attempt+1}次): {e}")
+                logger.error("LLM 异步调用失败(第%d次): %s", attempt + 1, e)
                 if attempt == LLM_CONFIG["retry_times"] - 1:
                     raise
                 await asyncio.sleep(1 * (attempt + 1))

@@ -8,7 +8,7 @@
 [![Coverage](https://img.shields.io/badge/Coverage-83%25-brightgreen.svg)](tests/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](docker-compose.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
-[![CI](https://github.com/Weizikai-1/aml-detection-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Weizikai-1/aml-detection-system/actions/workflows/ci.yml)
+[![CI](https://github.com/Weizikai-1/aml-detection-system/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Weizikai-1/aml-detection-system/actions/workflows/ci-cd.yml)
 
 ## 功能预览
 

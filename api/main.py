@@ -203,7 +203,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """处理请求参数校验错误"""
     logger.error(f"[API] 参数校验失败: {exc.errors()}")
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"detail": exc.errors(), "msg": "请求参数格式错误"},
     )
 

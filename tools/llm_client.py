@@ -11,16 +11,19 @@ import time
 from typing import Optional, Dict, Any
 
 from langchain_openai import ChatOpenAI
-from langchain_core.globals import set_llm_cache
-from langchain_core.cache import InMemoryCache
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LLM_CONFIG
 from config.cache import CACHE_CONFIG
 
 logger = logging.getLogger(__name__)
 
-if CACHE_CONFIG.get("llm_cache_enabled", False):
-    set_llm_cache(InMemoryCache())
-    logger.info("[LLM] 内存缓存已启用")
+try:
+    from langchain_core.globals import set_llm_cache
+    from langchain_core.cache import InMemoryCache
+    if CACHE_CONFIG.get("llm_cache_enabled", False):
+        set_llm_cache(InMemoryCache())
+        logger.info("[LLM] 内存缓存已启用")
+except ImportError:
+    logger.debug("[LLM] langchain_core.cache 不可用，仅使用文件缓存")
 
 
 class LlmFileCache:

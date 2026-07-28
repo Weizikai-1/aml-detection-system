@@ -237,7 +237,7 @@ docker compose up -d
 包含：AML API + PostgreSQL + Redis + Nginx（HTTPS）
 
 ### 详细部署文档
-见 [deploy/README.md](deploy/README.md)
+见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 ---
 

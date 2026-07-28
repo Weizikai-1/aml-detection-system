@@ -63,6 +63,9 @@ slowapi>=0.1.9
 # LLM 并发支持（nest_asyncio 用于事件循环补丁）
 nest-asyncio>=1.5.0
 
+# 代码风格检查（开发工具）
+ruff>=0.4.0
+
 # 图神经网络（可选，体积大，默认不装；启用 GNN 模块时安装）
 # torch>=2.0.0
 # torch-geometric>=2.4.0

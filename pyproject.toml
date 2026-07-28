@@ -1,0 +1,58 @@
+[tool.ruff]
+# 项目元信息
+target-version = "py310"
+line-length = 120
+extend-exclude = [
+    "data",
+    "reports",
+    "logs",
+    "backups",
+    ".pytest_cache",
+    "__pycache__",
+    "*.egg-info",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+# 启用规则集：
+# E  - pycodestyle 错误（PEP 8）
+# W  - pycodestyle 警告
+# F  - Pyflakes（未使用导入、未定义变量等）
+# I  - isort（导入排序）
+# UP - pyupgrade（现代化语法）
+# B  - flake8-bugbear（常见陷阱）
+select = ["E", "W", "F", "I", "UP", "B"]
+
+# 忽略的规则（项目现状允许，避免大规模重构）
+ignore = [
+    "E501",    # 行太长（项目已有大量长行，统一用 line-length 控制）
+    "B008",    # 在函数默认参数中调用函数（FastAPI Depends 模式需要）
+    "UP007",   # 使用 X | Y 而非 Optional[X]（Python 3.10+ 但保持兼容）
+    "UP045",   # 使用 X | None（同上）
+    "B904",    # raise from（项目已有大量裸 raise，逐步修复）
+    "E722",    # 裸 except（项目已有，逐步修复）
+    "E402",    # 模块级导入不在文件顶部（部分文件需先设环境变量）
+    "F401",    # 未使用导入（部分 __init__.py re-export 需要保留）
+    "F841",    # 未使用局部变量（少数测试辅助函数有）
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件允许一些灵活性
+"tests/**/*.py" = ["B011", "F841"]
+# __init__.py 允许未使用导入（re-export）
+"__init__.py" = ["F401", "F403"]
+# API 路由允许 B008（FastAPI Depends）
+"api/**/*.py" = ["B008"]
+# 主入口允许 E402
+"main.py" = ["E402"]
+"app.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agents", "api", "config", "graph", "tools"]
+force-single-line = false
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+indent-width = 4

@@ -86,6 +86,8 @@ class ReflectionEngine:
             reason_count[reason] += 1
 
             case_data = fp.get("case_data", {})
+            if not isinstance(case_data, dict):
+                continue
             hit_rules = case_data.get("hit_rules", [])
             for rule in hit_rules:
                 rule_fp_count[rule] += 1

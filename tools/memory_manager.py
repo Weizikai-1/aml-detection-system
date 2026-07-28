@@ -217,6 +217,8 @@ class MemoryManager:
         """
         if not case_data:
             raise ValueError("案件数据不能为空")
+        if not isinstance(case_data, dict):
+            raise TypeError("case_data 必须是字典")
 
         content_key = json.dumps(case_data, sort_keys=True, ensure_ascii=False)
         mid = _make_id("fp", content_key)
@@ -251,6 +253,8 @@ class MemoryManager:
         """
         if not case_data:
             raise ValueError("案件数据不能为空")
+        if not isinstance(case_data, dict):
+            raise TypeError("case_data 必须是字典")
 
         content_key = json.dumps(case_data, sort_keys=True, ensure_ascii=False)
         mid = _make_id("fn", content_key)

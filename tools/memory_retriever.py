@@ -197,7 +197,10 @@ class MemoryRetriever:
             except (FileNotFoundError, json.JSONDecodeError):
                 continue
 
-            fp_features = _extract_case_features(fp_data.get("case_data", {}))
+            fp_case_data = fp_data.get("case_data", {})
+            if not isinstance(fp_case_data, dict):
+                continue
+            fp_features = _extract_case_features(fp_case_data)
             sim = _cosine_similarity(query_features, fp_features)
             final_score = sim * fp_meta.get("weight", 1.0)
             if final_score >= threshold:
@@ -240,7 +243,10 @@ class MemoryRetriever:
             except (FileNotFoundError, json.JSONDecodeError):
                 continue
 
-            fn_features = _extract_case_features(fn_data.get("case_data", {}))
+            fn_case_data = fn_data.get("case_data", {})
+            if not isinstance(fn_case_data, dict):
+                continue
+            fn_features = _extract_case_features(fn_case_data)
             sim = _cosine_similarity(query_features, fn_features)
             final_score = sim * fn_meta.get("weight", 1.0)
             if final_score >= threshold:

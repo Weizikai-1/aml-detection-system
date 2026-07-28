@@ -21,7 +21,7 @@ from graph.state import AMLState, STRReport
 COMPLIANCE_CHECKS = {
     "completeness": {
         "name": "报告完整性",
-        "weight": 0.3,
+        "weight": 0.2,
         "required_fields": [
             "report_id",
             "primary_account",
@@ -35,11 +35,15 @@ COMPLIANCE_CHECKS = {
     },
     "evidence_sufficiency": {
         "name": "证据充分性",
-        "weight": 0.35,
+        "weight": 0.25,
+    },
+    "rule_compliance": {
+        "name": "戒律合规性",
+        "weight": 0.25,
     },
     "risk_consistency": {
         "name": "风险等级一致性",
-        "weight": 0.2,
+        "weight": 0.15,
     },
     "format_compliance": {
         "name": "格式规范性",
@@ -103,25 +107,90 @@ def _check_evidence(report: STRReport) -> Tuple[float, List[str]]:
     return min(score, 1.0), issues
 
 
+def _check_rule_compliance(report: STRReport) -> Tuple[float, List[str]]:
+    """检查业务戒律合规性（M1-M4 强制要求，P1-P4 严格禁止）"""
+    issues = []
+    score = 1.0
+    txns = report.get("suspicious_transactions", [])
+
+    if not txns:
+        return 0.0, ["无可疑交易，无法校验戒律合规性"]
+
+    # M2: 必须标注每个可疑交易的理由 —— 检查每笔是否有 rule_hits
+    no_rule_hits = [i for i, s in enumerate(txns) if not s.get("rule_hits")]
+    if no_rule_hits:
+        score -= 0.25
+        issues.append(f"M2违规: {len(no_rule_hits)} 笔交易缺少命中规则标注")
+
+    # M2: 检查每笔是否有 evidence（可疑理由证据）
+    no_evidence = [i for i, s in enumerate(txns) if not s.get("evidence")]
+    if no_evidence:
+        score -= 0.2
+        issues.append(f"M2违规: {len(no_evidence)} 笔交易缺少证据说明")
+
+    # M3: 风险评分范围 0-100 —— 检查每笔 risk_score 是否在范围内
+    # 戒律 M1: risk_score 可能为 None（键存在但值为 None），先判断 isinstance
+    invalid_scores = []
+    none_scores = []
+    for i, s in enumerate(txns):
+        rs = s.get("risk_score")
+        if rs is None or not isinstance(rs, (int, float)):
+            none_scores.append((i, rs))
+        elif rs < 0 or rs > 100:
+            invalid_scores.append((i, rs))
+    if invalid_scores:
+        score -= 0.2
+        issues.append(f"M3违规: {len(invalid_scores)} 笔交易风险评分超出 0-100 范围")
+    if none_scores:
+        score -= 0.1
+        issues.append(f"M3违规: {len(none_scores)} 笔交易风险评分为 None 或非法类型")
+
+    # P3: 禁止无证据判定可疑 —— rule_hits + evidence 都空的直接违规
+    no_evidence_at_all = [
+        i for i, s in enumerate(txns)
+        if not s.get("rule_hits") and not s.get("evidence")
+    ]
+    if no_evidence_at_all:
+        score -= 0.3
+        issues.append(f"P3违规: {len(no_evidence_at_all)} 笔交易无任何证据却被判定可疑")
+
+    # P1: 高风险交易不遗漏 —— 检查高风险(≥70)是否都有明确分析记录
+    # 戒律 M1: risk_score 可能为 None，先过滤非数值
+    high_risk = [s for s in txns if isinstance(s.get("risk_score"), (int, float)) and s.get("risk_score") >= 70]
+    if high_risk:
+        no_llm_analysis = [s for s in high_risk if not s.get("llm_analysis")]
+        # 降级模式下没有 llm_analysis 是正常的，只在有 LLM 时检查
+        has_any_llm = any(s.get("llm_analysis") for s in txns)
+        if has_any_llm and len(no_llm_analysis) > 0:
+            score -= 0.1
+            issues.append(f"P1提示: {len(no_llm_analysis)} 笔高风险交易缺少LLM分析记录")
+
+    return max(score, 0.0), issues
+
+
 def _check_risk_consistency(report: STRReport) -> Tuple[float, List[str]]:
-    """检查风险等级一致性"""
+    """检查风险等级一致性（百分制）"""
     issues = []
     risk_level = report.get("risk_level", "low")
     txns = report.get("suspicious_transactions", [])
 
     if not txns:
-        return 0.5, ["无可疑交易但标记为可疑"]
+        return 0.0, ["无可疑交易但标记为可疑"]
 
-    avg_score = sum(s.get("risk_score", 0.5) for s in txns) / len(txns)
-    max_score = max(s.get("risk_score", 0.5) for s in txns)
+    # 戒律 M1: risk_score 可能为 None，过滤 None 或用 (s.get("risk_score") or 50) 兜底
+    valid_scores = [s.get("risk_score") or 50 for s in txns]
+    # 二次保护：过滤掉非数值（保守用 50 兜底）
+    valid_scores = [s if isinstance(s, (int, float)) else 50 for s in valid_scores]
+    avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
+    max_score = max(valid_scores) if valid_scores else 0
 
     # 期望的风险等级范围
     expected = "low"
-    if max_score >= 0.85 or (avg_score >= 0.7 and len(txns) >= 5):
+    if max_score >= 85 or (avg_score >= 70 and len(txns) >= 5):
         expected = "critical"
-    elif max_score >= 0.7 or (avg_score >= 0.55 and len(txns) >= 3):
+    elif max_score >= 70 or (avg_score >= 55 and len(txns) >= 3):
         expected = "high"
-    elif max_score >= 0.5 or len(txns) >= 2:
+    elif max_score >= 50 or len(txns) >= 2:
         expected = "medium"
 
     risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -191,6 +260,9 @@ def _audit_report(report: STRReport) -> Tuple[str, float, List[str], str]:
     evidence_score, evidence_issues = _check_evidence(report)
     all_issues.extend(evidence_issues)
 
+    rule_score, rule_issues = _check_rule_compliance(report)
+    all_issues.extend(rule_issues)
+
     risk_score, risk_issues = _check_risk_consistency(report)
     all_issues.extend(risk_issues)
 
@@ -201,6 +273,7 @@ def _audit_report(report: STRReport) -> Tuple[str, float, List[str], str]:
     total_score = (
         completeness_score * COMPLIANCE_CHECKS["completeness"]["weight"]
         + evidence_score * COMPLIANCE_CHECKS["evidence_sufficiency"]["weight"]
+        + rule_score * COMPLIANCE_CHECKS["rule_compliance"]["weight"]
         + risk_score * COMPLIANCE_CHECKS["risk_consistency"]["weight"]
         + format_score * COMPLIANCE_CHECKS["format_compliance"]["weight"]
     )
@@ -299,7 +372,8 @@ def create_compliance_auditor_agent(llm=None):
         # 统计
         stats = {
             "total": len(reports),
-            "passed": len([r for r in final_reports if r["compliance_status"] == "passed"]),
+            # 戒律 M1: 使用 .get() 避免 KeyError（compliance_status 可能为 None）
+            "passed": len([r for r in final_reports if r.get("compliance_status") == "passed"]),
             "human_review": len(human_review_tasks),
             "rejected": len(rejected_reports),
         }

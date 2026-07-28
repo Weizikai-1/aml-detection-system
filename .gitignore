@@ -1,6 +1,7 @@
-﻿# 环境变量(包含 API Key,绝对不能提交)
+# 环境变量(包含 API Key 和密码,绝对不能提交)
 .env
 .env.local
+.env.production
 
 # Python
 __pycache__/
@@ -34,6 +35,26 @@ reports/*
 # 数据文件(数据集不提交,体积大)
 data/*.csv
 data/*.json
+data/*.xlsx
+data/*.xls
+data/evaluations/
+data/ab_tests/
+data/cross_impact/
+data/optimization_loop/
+data/feedback/
+data/ground_truth_versions/
+data/snapshots/
+data/effect_reports/
+data/knowledge/
+data/audit/
+data/tmp/
+data/uploads/
+data/alerts/
+data/history/
+data/lineage/
+data/profiles/
+data/stress_test/
+data/transactions/
 !data/.gitkeep
 !data/README.md
 

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>反洗钱系统 - 数据上传</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+        .header p {
+            opacity: 0.8;
+            font-size: 14px;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            padding: 30px;
+            margin-bottom: 20px;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3498db;
+        }
+        .upload-area {
+            border: 3px dashed #ddd;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .upload-area:hover, .upload-area.dragover {
+            border-color: #3498db;
+            background: #f8f9fa;
+        }
+        .upload-area.active {
+            border-color: #27ae60;
+            background: #e8f5e9;
+        }
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .upload-text {
+            font-size: 16px;
+            color: #7f8c8d;
+            margin-bottom: 5px;
+        }
+        .upload-hint {
+            font-size: 12px;
+            color: #95a5a6;
+        }
+        #fileInput {
+            display: none;
+        }
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #2980b9;
+        }
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+        .btn-success:hover {
+            background: #2ecc71;
+        }
+        .btn-secondary {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
+        .btn-secondary:hover {
+            background: #bdc3c7;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+        .preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 13px;
+        }
+        .preview-table th, .preview-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .preview-table th {
+            background: #f5f6fa;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        .preview-table tr:hover td {
+            background: #f8f9fa;
+        }
+        .status-box {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status-warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+        .status-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .hidden {
+            display: none;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .info-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .info-label {
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-bottom: 5px;
+        }
+        .info-value {
+            font-size: 20px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .field-mapping {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+        .field-mapping h4 {
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+        .mapping-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px dashed #ddd;
+            font-size: 13px;
+        }
+        .mapping-key {
+            color: #7f8c8d;
+        }
+        .mapping-value {
+            color: #27ae60;
+            font-weight: 500;
+        }
+        .bank-info {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #3498db;
+            color: white;
+            padding: 6px 15px;
+            border-radius: 20px;
+            font-size: 13px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 反洗钱交易数据上传</h1>
+            <p>支持 CSV / Excel / JSON 格式，自动识别国内主流银行流水</p>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="card">
+            <div class="section-title">
+                <span>📁</span> 文件上传
+            </div>
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📥</div>
+                <div class="upload-text">点击或拖拽文件到此处上传</div>
+                <div class="upload-hint">支持 .csv / .xls / .xlsx / .json 格式</div>
+                <input type="file" id="fileInput" accept=".csv,.xls,.xlsx,.json">
+            </div>
+
+            <div id="fileInfo" class="hidden">
+                <div class="bank-info" id="bankInfo"></div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">文件名</div>
+                        <div class="info-value" id="fileName"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">总行数</div>
+                        <div class="info-value" id="totalRows"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">有效行</div>
+                        <div class="info-value" id="validRows"></div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">数据质量</div>
+                        <div class="info-value" id="qualityScore"></div>
+                    </div>
+                </div>
+                <div class="field-mapping" id="fieldMapping"></div>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-primary" id="btnPreview" disabled>预览数据</button>
+                <button class="btn btn-success" id="btnUpload" disabled>上传并分析</button>
+                <button class="btn btn-secondary" id="btnReset">重新选择</button>
+            </div>
+        </div>
+
+        <!-- 预览区域 -->
+        <div class="card hidden" id="previewCard">
+            <div class="section-title">
+                <span>👁️</span> 数据预览（前 10 行）
+            </div>
+            <div id="previewTableContainer"></div>
+        </div>
+
+        <!-- 状态区域 -->
+        <div class="card hidden" id="statusCard">
+            <div class="section-title">
+                <span>📋</span> 操作状态
+            </div>
+            <div id="statusMessage"></div>
+        </div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const btnPreview = document.getElementById('btnPreview');
+        const btnUpload = document.getElementById('btnUpload');
+        const btnReset = document.getElementById('btnReset');
+        const fileInfo = document.getElementById('fileInfo');
+        const previewCard = document.getElementById('previewCard');
+        const statusCard = document.getElementById('statusCard');
+        const statusMessage = document.getElementById('statusMessage');
+
+        let currentFile = null;
+        let previewData = null;
+
+        // 点击上传区域
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        // 拖拽上传
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        // 文件选择
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            if (!['csv', 'xls', 'xlsx', 'json'].includes(ext)) {
+                showStatus('error', `不支持的文件格式: ${ext}，请上传 .csv / .xls / .xlsx / .json 文件`);
+                return;
+            }
+            currentFile = file;
+            uploadArea.classList.add('active');
+            btnPreview.disabled = false;
+            btnUpload.disabled = true;
+            previewCard.classList.add('hidden');
+            fileInfo.classList.remove('hidden');
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('totalRows').textContent = '...';
+            document.getElementById('validRows').textContent = '...';
+            document.getElementById('qualityScore').textContent = '...';
+            document.getElementById('bankInfo').textContent = '检测中...';
+            document.getElementById('fieldMapping').innerHTML = '';
+        }
+
+        // 预览按钮
+        btnPreview.addEventListener('click', async () => {
+            if (!currentFile) return;
+            showStatus('info', '<span class="loading"></span> 正在预览文件...');
+            btnPreview.disabled = true;
+
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            formData.append('limit', 10);
+
+            try {
+                const response = await fetch('/api/upload/preview', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    previewData = result;
+                    renderPreview(result);
+                    showStatus('success', `成功预览 ${result.total_rows} 行数据，检测到 ${result.bank_name}`);
+                    btnUpload.disabled = false;
+                } else {
+                    showStatus('error', result.message || '预览失败');
+                }
+            } catch (error) {
+                showStatus('error', `预览失败: ${error.message}`);
+            } finally {
+                btnPreview.disabled = false;
+            }
+        });
+
+        function renderPreview(data) {
+            previewCard.classList.remove('hidden');
+            document.getElementById('bankInfo').textContent = `🏦 ${data.bank_name}`;
+            document.getElementById('totalRows').textContent = data.total_rows;
+
+            // 渲染字段映射
+            const mappingHtml = `<h4>字段映射结果</h4>` +
+                Object.entries(data.field_mapping).map(([key, value]) =>
+                    `<div class="mapping-item"><span class="mapping-key">${key}</span><span class="mapping-value">→ ${value}</span></div>`
+                ).join('');
+            document.getElementById('fieldMapping').innerHTML = mappingHtml;
+
+            // 渲染预览表格
+            if (data.sample_rows && data.sample_rows.length > 0) {
+                const columns = Object.keys(data.sample_rows[0]);
+                const tableHtml = `
+                    <table class="preview-table">
+                        <thead>
+                            <tr>${columns.map(col => `<th>${col}</th>`).join('')}</tr>
+                        </thead>
+                        <tbody>
+                            ${data.sample_rows.map(row =>
+                                `<tr>${columns.map(col => `<td>${row[col] || ''}</td>`).join('')}</tr>`
+                            ).join('')}
+                        </tbody>
+                    </table>
+                `;
+                document.getElementById('previewTableContainer').innerHTML = tableHtml;
+            }
+        }
+
+        // 上传按钮
+        btnUpload.addEventListener('click', async () => {
+            if (!currentFile) return;
+            showStatus('info', '<span class="loading"></span> 正在上传并分析数据...');
+            btnUpload.disabled = true;
+
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            formData.append('auto_analyze', 'true');
+
+            try {
+                const response = await fetch('/api/upload/file', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    document.getElementById('validRows').textContent = result.valid_rows;
+                    document.getElementById('qualityScore').textContent =
+                        (result.data_quality?.quality_score || 0).toFixed(2);
+                    showStatus('success', `成功导入 ${result.valid_rows} 条交易数据！`);
+                    if (result.task_id) {
+                        setTimeout(() => {
+                            window.location.href = `/api/reports?task_id=${result.task_id}`;
+                        }, 2000);
+                    }
+                } else {
+                    showStatus('error', result.message || '上传失败');
+                    if (result.errors) {
+                        showStatus('error', result.errors.join('<br>'));
+                    }
+                }
+            } catch (error) {
+                showStatus('error', `上传失败: ${error.message}`);
+            } finally {
+                btnUpload.disabled = false;
+            }
+        });
+
+        // 重置按钮
+        btnReset.addEventListener('click', () => {
+            currentFile = null;
+            previewData = null;
+            fileInput.value = '';
+            uploadArea.classList.remove('active');
+            btnPreview.disabled = true;
+            btnUpload.disabled = true;
+            fileInfo.classList.add('hidden');
+            previewCard.classList.add('hidden');
+            statusCard.classList.add('hidden');
+        });
+
+        function showStatus(type, message) {
+            statusCard.classList.remove('hidden');
+            statusMessage.className = `status-box status-${type}`;
+            statusMessage.innerHTML = message;
+        }
+
+        // 获取支持格式信息
+        async function loadSupportedFormats() {
+            try {
+                const response = await fetch('/api/upload/formats');
+                const result = await response.json();
+                console.log('支持的银行格式:', result);
+            } catch (error) {
+                console.error('加载格式信息失败:', error);
+            }
+        }
+
+        loadSupportedFormats();
+    </script>
+</body>
+</html>

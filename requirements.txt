@@ -1,4 +1,4 @@
-﻿# 核心框架
+# 核心框架
 langgraph>=0.2.0
 langchain>=0.3.0
 langchain-openai>=0.2.0
@@ -11,6 +11,13 @@ openai>=1.0.0
 pandas>=2.0.0
 numpy>=1.24.0
 
+# 报告导出
+openpyxl>=3.1.0
+reportlab>=4.0.0
+
+# 图算法
+networkx>=3.0
+
 # 环境变量管理
 python-dotenv>=1.0.0
 
@@ -20,10 +27,49 @@ loguru>=0.7.0
 # 测试(开发用)
 pytest>=7.0.0
 
-# 图神经网络(第2周加入)
+# 图神经网络（可选，大模型，不默认包含）
 # torch>=2.0.0
 # torch-geometric>=2.4.0
 
-# Web 界面(第4周加入)
-# streamlit>=1.30.0
-# plotly>=5.0.0
+# Web 界面与可视化
+plotly>=5.0.0
+streamlit>=1.30.0
+
+# API 服务
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# 数据库（可选，不使用PostgreSQL时可跳过）
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# 认证与加密
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0
+cryptography>=41.0.0
+
+# 异步任务（可选，不使用Celery时可跳过）
+celery>=5.3.0
+redis>=5.0.0
+
+# 监控
+prometheus-client>=0.19.0
+
+# 限流
+slowapi>=0.1.9
+
+# LLM 并发支持（nest_asyncio 用于事件循环补丁）
+nest-asyncio>=1.5.0
+
+# 图神经网络（可选，体积大，默认不装；启用 GNN 模块时安装）
+# torch>=2.0.0
+# torch-geometric>=2.4.0
+
+# 性能测试（可选，压测时安装）
+# locust>=2.20.0
+# httpx>=0.25.0
+
+# 邮件通知（可选）
+# aiosmtplib>=3.0.0

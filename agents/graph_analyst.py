@@ -1,220 +1,267 @@
 """
 Agent 3: 图分析 Agent
 
-职责: 构建资金流向图谱，用社区发现算法检测团伙洗钱
+职责: 构建资金流向图谱，用 NetworkX 图算法检测团伙洗钱
 模式: create_graph_analyst_agent(llm) -> node_function
 
 分析方法:
-1. 构建资金流向有向图(账户=节点，交易=边)
-2. 社区发现(Louvain算法)
-3. 可疑社区识别(高密度、高风险评分)
-4. 中心性分析(PageRank/度中心性)
-5. 输出可疑团伙列表和关联可疑交易
-
-注意: 当前版本使用 NetworkX 实现基础图分析，
-     GNN(图神经网络) 扩展可在后续迭代中加入 PyTorch Geometric
+1. 构建资金流向有向图(账户=节点，交易=边，金额=权重)
+2. PageRank 识别核心账户
+3. 介数中心性识别资金中转枢纽
+4. 社区发现(Greedy Modularity)检测团伙结构
+5. 可疑社区识别 + 交易证据增强
+6. GNN 节点分类: 训练 GCN 模型对账户进行可疑/正常二分类
+7. 合并 GNN 风险分到节点属性，补充图数据返回
 """
 import time
 from collections import defaultdict
-from typing import Dict, List, Set
-from graph.state import AMLState, SuspiciousTransaction, GraphData, Transaction
+from typing import Dict, List
+import networkx as nx
+from graph.state import AMLState, SuspiciousTransaction, Transaction, GraphData
 
-
-def _build_graph(transactions: List[Transaction]):
+def _build_graph(transactions: List[Transaction]) -> nx.DiGraph:
     """
-    从交易列表构建资金流向图
+    从交易列表构建资金流向有向图
 
-    Returns:
-        nodes: {account: {属性}}
-        edges: [{from, to, amount, count, txn_ids}]
+    节点属性: account_id, in_degree, out_degree, in_amount, out_amount, total_txns
+    边属性: total_amount, txn_count, txn_ids
     """
-    nodes: Dict[str, dict] = {}
-    edge_map: Dict[tuple, dict] = {}
+    G = nx.DiGraph()
 
     for txn in transactions:
-        from_acc = txn["from_account"]
-        to_acc = txn["to_account"]
-        amount = float(txn.get("amount", 0))
+        from_acc = txn.get("from_account")
+        to_acc = txn.get("to_account")
+        # 戒律 M1: 缺失账户字段跳过，不编造
+        if not from_acc or not to_acc:
+            continue
+        # 戒律 P2: 自转账导致自环，过滤掉
+        if from_acc == to_acc:
+            continue
+        # 戒律 M1: amount 缺失（None）跳过，不编造
+        raw_amount = txn.get("amount")
+        if raw_amount is None:
+            continue
+        try:
+            amount = float(raw_amount)
+        except (TypeError, ValueError):
+            continue
+        tid = txn.get("transaction_id", "")
 
         # 添加节点
-        if from_acc not in nodes:
-            nodes[from_acc] = {
-                "account_id": from_acc,
-                "in_degree": 0,
-                "out_degree": 0,
-                "in_amount": 0.0,
-                "out_amount": 0.0,
-                "total_txns": 0,
-                "risk_score": 0.0,
-            }
-        if to_acc not in nodes:
-            nodes[to_acc] = {
-                "account_id": to_acc,
-                "in_degree": 0,
-                "out_degree": 0,
-                "in_amount": 0.0,
-                "out_amount": 0.0,
-                "total_txns": 0,
-                "risk_score": 0.0,
-            }
+        for acc in [from_acc, to_acc]:
+            if not G.has_node(acc):
+                G.add_node(acc,
+                    account_id=acc,
+                    in_degree=0,
+                    out_degree=0,
+                    in_amount=0.0,
+                    out_amount=0.0,
+                    total_txns=0,
+                    risk_score=0.0,
+                )
 
-        # 更新节点统计
-        nodes[from_acc]["out_degree"] += 1
-        nodes[from_acc]["out_amount"] += amount
-        nodes[from_acc]["total_txns"] += 1
-        nodes[to_acc]["in_degree"] += 1
-        nodes[to_acc]["in_amount"] += amount
-        nodes[to_acc]["total_txns"] += 1
+        # 更新出入度
+        G.nodes[from_acc]["out_degree"] += 1
+        G.nodes[from_acc]["out_amount"] += amount
+        G.nodes[from_acc]["total_txns"] += 1
+        G.nodes[to_acc]["in_degree"] += 1
+        G.nodes[to_acc]["in_amount"] += amount
+        G.nodes[to_acc]["total_txns"] += 1
 
-        # 更新边
-        key = (from_acc, to_acc)
-        if key not in edge_map:
-            edge_map[key] = {
-                "from": from_acc,
-                "to": to_acc,
-                "total_amount": 0.0,
-                "txn_count": 0,
-                "txn_ids": [],
-            }
-        edge_map[key]["total_amount"] += amount
-        edge_map[key]["txn_count"] += 1
-        edge_map[key]["txn_ids"].append(txn.get("transaction_id", ""))
+        # 添加/更新边
+        if G.has_edge(from_acc, to_acc):
+            G[from_acc][to_acc]["total_amount"] += amount
+            G[from_acc][to_acc]["txn_count"] += 1
+            G[from_acc][to_acc]["txn_ids"].append(tid)
+        else:
+            G.add_edge(from_acc, to_acc,
+                total_amount=amount,
+                txn_count=1,
+                txn_ids=[tid],
+            )
 
-    edges = list(edge_map.values())
-    return nodes, edges
+    return G
 
 
-def _compute_node_risk_scores(nodes: Dict[str, dict], rule_hits: List[SuspiciousTransaction]) -> Dict[str, float]:
+def _compute_node_risk_scores(G: nx.DiGraph, rule_hits: List[SuspiciousTransaction]) -> Dict[str, float]:
     """
     基于规则命中结果计算节点风险评分
-    规则命中越多、涉及金额越大，风险越高
+    规则命中越多、涉及金额越大，风险越高（百分制 0-100）
     """
-    risk_scores = {acc: 0.0 for acc in nodes}
+    risk_scores = {n: 0.0 for n in G.nodes()}
 
-    # 从可疑交易中提取账户风险
     for s in rule_hits:
-        txn = s["transaction"]
-        from_acc = txn["from_account"]
-        to_acc = txn["to_account"]
-        score = s.get("risk_score", 0.5)
-        amount = float(txn.get("amount", 0))
+        txn = s.get("transaction", {})
+        from_acc = txn.get("from_account")
+        to_acc = txn.get("to_account")
+        # 戒律 M1: 缺失账户字段跳过
+        if not from_acc or not to_acc:
+            continue
+        # 戒律 M1: 风险评分可能缺失或非法，保守处理
+        try:
+            score = float(s.get("risk_score", 50))
+        except (TypeError, ValueError):
+            score = 50.0
+        try:
+            amount = float(txn.get("amount", 0))
+        except (TypeError, ValueError):
+            amount = 0.0
 
-        # 两个账户都加分
         for acc in [from_acc, to_acc]:
             if acc in risk_scores:
-                # 基础分 + 金额加权
-                amount_factor = min(amount / 100000.0, 1.0)  # 10万以上封顶
-                risk_scores[acc] = max(risk_scores[acc], score + amount_factor * 0.2)
-                risk_scores[acc] = min(risk_scores[acc], 1.0)
+                amount_factor = min(amount / 100000.0, 1.0)
+                new_score = score + amount_factor * 20  # 金额最多加20分
+                # 戒律 M3: 限制在 0-100 范围
+                risk_scores[acc] = max(risk_scores[acc], min(max(new_score, 0), 100.0))
 
-    # 更新节点属性
+    # 写回节点属性
     for acc, score in risk_scores.items():
-        if acc in nodes:
-            nodes[acc]["risk_score"] = round(score, 4)
+        G.nodes[acc]["risk_score"] = round(score, 2)
 
     return risk_scores
 
 
-def _detect_communities(nodes: Dict[str, dict], edges: List[dict]) -> List[List[str]]:
+def _compute_centrality(G: nx.DiGraph) -> Dict[str, Dict[str, float]]:
     """
-    社区发现: 简化版Louvain算法
-    基于图连通性 + 交易密度做贪心社区划分
-
-    策略:
-    1. 构建无向邻接表
-    2. 贪心合并: 将节点归入其邻居最多的社区
-    3. 社区大小过滤(3个节点以上才算社区)
+    计算图中心性指标:
+    - pagerank: 节点在资金流转中的重要性
+    - betweenness: 资金中转枢纽程度
+    - degree_centrality: 连接广泛程度
     """
-    # 构建无向邻接表
-    adj: Dict[str, Set[str]] = defaultdict(set)
-    for e in edges:
-        adj[e["from"]].add(e["to"])
-        adj[e["to"]].add(e["from"])
+    # PageRank: 用交易金额作为权重
+    # 金额越大权重越高，归一化后作为 personalization
+    total_out = {n: d["out_amount"] for n, d in G.nodes(data=True)}
+    max_out = max(total_out.values()) if total_out else 1.0
+    # 戒律 P4: 避免除零（所有节点 out_amount 都为 0 时）
+    if max_out <= 0:
+        max_out = 1.0
+    personalization = {n: total_out[n] / max_out + 0.01 for n in G.nodes()}
 
-    # 初始化: 每个节点一个社区
-    node_community = {acc: i for i, acc in enumerate(nodes.keys())}
-    communities: Dict[int, Set[str]] = {i: {acc} for i, acc in enumerate(nodes.keys())}
+    try:
+        pagerank = nx.pagerank(G, alpha=0.85, personalization=personalization, max_iter=100)
+    except nx.PowerIterationFailedConvergence:
+        pagerank = {n: 1.0 / G.number_of_nodes() for n in G.nodes()}
 
-    # 贪心迭代(简化版Louvain第一阶段)
-    changed = True
-    max_iter = 20
-    iteration = 0
+    # 度中心性
+    degree_centrality = nx.degree_centrality(G)
 
-    while changed and iteration < max_iter:
-        changed = False
-        iteration += 1
+    # 介数中心性(大图可能慢，但80节点级没问题)
+    # 修复：weight 参数表示"路径成本"（越大越不愿走），但 total_amount 是金额（越大越重要）
+    # 使用金额倒数作为成本，使高金额边被视为"短路径"
+    if G.number_of_nodes() > 1:
+        for u, v, d in G.edges(data=True):
+            amt = d.get("total_amount", 0)
+            # 戒律 M1: 金额类型校验，避免非数值导致除零或类型异常
+            if isinstance(amt, (int, float)) and amt > 0:
+                d["weight_cost"] = 1.0 / amt
+            else:
+                d["weight_cost"] = 1.0
+        betweenness = nx.betweenness_centrality(G, weight="weight_cost", normalized=True)
+    else:
+        betweenness = {n: 0.0 for n in G.nodes()}
 
-        for node in nodes:
-            if node not in adj or len(adj[node]) == 0:
-                continue
+    # 写回节点属性
+    for n in G.nodes():
+        G.nodes[n]["pagerank"] = round(pagerank.get(n, 0), 6)
+        G.nodes[n]["betweenness"] = round(betweenness.get(n, 0), 6)
+        G.nodes[n]["degree_centrality"] = round(degree_centrality.get(n, 0), 6)
 
-            current_comm = node_community[node]
-            neighbor_communities: Dict[int, int] = defaultdict(int)
+    return {
+        "pagerank": pagerank,
+        "betweenness": betweenness,
+        "degree_centrality": degree_centrality,
+    }
 
-            # 统计邻居所在社区
-            for neighbor in adj[node]:
-                if neighbor in node_community:
-                    neighbor_communities[node_community[neighbor]] += 1
 
-            if not neighbor_communities:
-                continue
+def _detect_communities(G: nx.DiGraph) -> List[List[str]]:
+    """
+    社区发现: Greedy Modularity Communities
 
-            # 找邻居最多的社区
-            best_comm = max(neighbor_communities, key=neighbor_communities.get)
-            best_count = neighbor_communities[best_comm]
+    基于模块度优化的贪心社区划分，比简单连通分量更精准。
+    过滤掉小于3个节点的社区。
+    """
+    # 转为无向图做社区发现(资金双向流动视为连通)
+    undirected = G.to_undirected()
 
-            # 当前社区的邻居数
-            current_count = neighbor_communities.get(current_comm, 0)
+    # 去除孤立节点
+    isolated = [n for n in undirected.nodes() if undirected.degree(n) == 0]
+    for n in isolated:
+        undirected.remove_node(n)
 
-            # 如果换社区能增加连接数
-            if best_comm != current_comm and best_count > current_count:
-                # 移动节点
-                communities[current_comm].discard(node)
-                if len(communities[current_comm]) == 0:
-                    del communities[current_comm]
+    if undirected.number_of_nodes() == 0:
+        return []
 
-                communities[best_comm].add(node)
-                node_community[node] = best_comm
-                changed = True
+    try:
+        communities = list(nx.community.greedy_modularity_communities(
+            undirected,
+            weight="total_amount",
+        ))
+    except Exception:
+        # 退化: 按连通分量划分
+        communities = list(nx.connected_components(undirected))
 
-    # 过滤掉太小的社区(小于3个节点)，按大小排序
-    result = []
-    for comm_id, members in communities.items():
-        if len(members) >= 3:
-            result.append(sorted(list(members)))
-
-    # 按社区大小降序
+    # 过滤小于3的社区，转为列表，按大小排序
+    result = [sorted(list(c)) for c in communities if len(c) >= 3]
     result.sort(key=lambda x: len(x), reverse=True)
     return result
 
 
 def _identify_suspicious_communities(
+    G: nx.DiGraph,
     communities: List[List[str]],
     risk_scores: Dict[str, float],
-    nodes: Dict[str, dict],
+    centrality: Dict[str, Dict[str, float]],
 ) -> List[dict]:
     """
     识别可疑社区
-    计算每个社区的风险指标，输出高风险社区详情
+
+    综合评估维度:
+    - 平均风险评分
+    - 高风险成员比例
+    - 社区规模
+    - 内部交易密度
     """
+    pagerank = centrality.get("pagerank", {})
     suspicious = []
 
     for i, members in enumerate(communities):
-        # 社区风险评分: 成员风险评分的平均值 + 高风险成员比例
         member_scores = [risk_scores.get(m, 0.0) for m in members]
         avg_risk = sum(member_scores) / len(member_scores) if member_scores else 0
-        high_risk_count = sum(1 for s in member_scores if s >= 0.5)
+        high_risk_count = sum(1 for s in member_scores if s >= 50)
         high_risk_ratio = high_risk_count / len(member_scores) if member_scores else 0
 
-        # 社区综合风险分
-        community_risk = avg_risk * 0.5 + high_risk_ratio * 0.5
-
         # 社区总交易量
-        total_txn = sum(nodes.get(m, {}).get("total_txns", 0) for m in members)
+        total_txn = sum(G.nodes[m]["total_txns"] for m in members)
         total_amount = sum(
-            nodes.get(m, {}).get("in_amount", 0) + nodes.get(m, {}).get("out_amount", 0)
+            G.nodes[m]["in_amount"] + G.nodes[m]["out_amount"]
             for m in members
-        ) / 2  # 双边统计，除以2
+        ) / 2
+
+        # 内部边密度
+        internal_edges = 0
+        for u in members:
+            for v in members:
+                if G.has_edge(u, v):
+                    internal_edges += 1
+        max_internal = len(members) * (len(members) - 1)
+        density = internal_edges / max_internal if max_internal > 0 else 0
+
+        # 社区综合风险分（百分制）: 风险评分*0.5 + 高风险比例*30 + 密度*20
+        community_risk = avg_risk * 0.5 + high_risk_ratio * 30 + density * 20
+
+        # 前5高风险成员
+        top_risk = sorted(
+            [(m, risk_scores.get(m, 0)) for m in members],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:5]
+
+        # 核心节点(PageRank top3)
+        top_pr = sorted(
+            [(m, pagerank.get(m, 0)) for m in members],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:3]
 
         suspicious.append({
             "community_id": f"COMM_{i + 1:03d}",
@@ -226,30 +273,32 @@ def _identify_suspicious_communities(
             "community_risk": round(community_risk, 4),
             "total_transactions": total_txn,
             "total_amount": round(total_amount, 2),
-            "top_risk_members": sorted(
-                [(m, risk_scores.get(m, 0)) for m in members],
-                key=lambda x: x[1],
-                reverse=True
-            )[:5],
+            "internal_density": round(density, 4),
+            "top_risk_members": top_risk,
+            "core_nodes_by_pagerank": top_pr,
         })
 
-    # 按社区风险降序
     suspicious.sort(key=lambda x: x["community_risk"], reverse=True)
     return suspicious
 
 
 def _enrich_suspicious_with_graph(
+    G: nx.DiGraph,
     rule_hits: List[SuspiciousTransaction],
     suspicious_communities: List[dict],
     risk_scores: Dict[str, float],
+    centrality: Dict[str, Dict[str, float]],
 ) -> List[SuspiciousTransaction]:
     """
     将图分析结果补充到可疑交易中
     - 标记所属社区
-    - 添加图分析证据
+    - 添加图分析证据(PageRank/介数/社区)
     - 调整风险评分
     """
-    # 构建账户到社区的映射
+    pagerank = centrality.get("pagerank", {})
+    betweenness = centrality.get("betweenness", {})
+
+    # 构建账户到社区的映射(取风险最高的社区)
     account_to_community: Dict[str, dict] = {}
     for comm in suspicious_communities:
         for m in comm["members"]:
@@ -258,40 +307,62 @@ def _enrich_suspicious_with_graph(
 
     enriched = []
     for s in rule_hits:
-        txn = s["transaction"]
-        from_acc = txn["from_account"]
-        to_acc = txn["to_account"]
-
-        # 检查是否属于可疑社区
-        from_comm = account_to_community.get(from_acc)
-        to_comm = account_to_community.get(to_acc)
+        txn = s.get("transaction", {})
+        from_acc = txn.get("from_account")
+        to_acc = txn.get("to_account")
+        # 戒律 M1: 缺失账户字段跳过
+        if not from_acc or not to_acc:
+            continue
 
         s_copy = dict(s)
-        s_copy["rule_hits"] = list(s["rule_hits"])
-        s_copy["evidence"] = list(s["evidence"])
+        s_copy["rule_hits"] = list(s.get("rule_hits", []))
+        s_copy["evidence"] = list(s.get("evidence", []))
+        s_copy["transaction"] = dict(txn)
 
-        if from_comm or to_comm:
-            comm = from_comm or to_comm
+        # 图分析证据
+        graph_evidence_parts = []
+
+        # PageRank 指标
+        pr_max = max(pagerank.get(from_acc, 0), pagerank.get(to_acc, 0))
+        if pr_max > 0.05:
+            graph_evidence_parts.append(f"PageRank高({pr_max:.4f})")
+
+        # 介数中心性
+        bt_max = max(betweenness.get(from_acc, 0), betweenness.get(to_acc, 0))
+        if bt_max > 0.1:
+            graph_evidence_parts.append(f"介数中心性高({bt_max:.3f})")
+
+        # 社区信息
+        from_comm = account_to_community.get(from_acc)
+        to_comm = account_to_community.get(to_acc)
+        comm = from_comm or to_comm
+
+        if comm:
             s_copy["community_id"] = comm["community_id"]
-
-            graph_evidence = (
-                f"图分析: 涉及可疑社区[{comm['community_id']}]，"
-                f"社区规模{comm['size']}个账户，社区风险{comm['community_risk']:.2f}"
+            graph_evidence_parts.append(
+                f"涉及可疑社区[{comm['community_id']}]({comm['size']}账户,风险{comm['community_risk']:.2f})"
             )
+
+        if graph_evidence_parts:
+            graph_evidence = "图分析: " + "，".join(graph_evidence_parts)
             s_copy["graph_evidence"] = graph_evidence
             s_copy["evidence"].append(graph_evidence)
 
-            # 提升风险评分
-            risk_boost = comm["community_risk"] * 0.15
-            s_copy["risk_score"] = min(s.get("risk_score", 0.5) + risk_boost, 1.0)
+            # 风险评分提升（百分制）: 社区风险*0.15 + 中心性加成(最多10分)
+            risk_boost = 0.0
+            if comm:
+                risk_boost += comm["community_risk"] * 0.15
+            risk_boost += min(pr_max * 50, 10)
+            # 戒律 M3: 限制在 0-100 范围（双向夹紧）
+            try:
+                base_score = float(s.get("risk_score", 50))
+            except (TypeError, ValueError):
+                base_score = 50.0
+            s_copy["risk_score"] = max(min(base_score + risk_boost, 100), 0)
 
-        # 更新交易的风险评分
-        s_copy["transaction"] = dict(txn)
         s_copy["transaction"]["risk_score"] = s_copy["risk_score"]
-
         enriched.append(s_copy)
 
-    # 按更新后的风险评分重排
     enriched.sort(key=lambda x: x["risk_score"], reverse=True)
     return enriched
 
@@ -312,11 +383,12 @@ def create_graph_analyst_agent(llm=None):
         图分析节点函数
 
         工作内容:
-        1. 从清洗后交易构建资金流向图
+        1. 构建资金流向有向图
         2. 计算节点风险评分
-        3. 社区发现
-        4. 识别可疑社区
-        5. 补充可疑交易的图分析证据
+        3. 计算中心性指标(PageRank/介数/度中心性)
+        4. 社区发现
+        5. 识别可疑社区
+        6. 增强可疑交易证据
         """
         start_time = time.time()
         print("\n" + "=" * 60)
@@ -334,79 +406,206 @@ def create_graph_analyst_agent(llm=None):
             return {
                 "graph_data": {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0,
                                "communities": [], "suspicious_communities": [],
-                               "node_risk_scores": {}, "graph_stats": {}},
+                               "node_risk_scores": {}, "graph_stats": {},
+                               "centrality": {}, "gnn_result": None},
                 "graph_suspicious": [],
                 "graph_hit_count": 0,
                 "current_step": "graph_analyst",
             }
 
         # ---- 1. 构建图 ----
-        print("  [步骤 1/4] 构建资金流向图...")
-        nodes, edges = _build_graph(cleaned)
-        print(f"    → 节点数: {len(nodes)}, 边数: {len(edges)}")
+        print("  [步骤 1/6] 构建资金流向图...")
+        G = _build_graph(cleaned)
+        node_count = G.number_of_nodes()
+        edge_count = G.number_of_edges()
+        print(f"    → 节点数: {node_count}, 边数: {edge_count}")
 
         # ---- 2. 计算节点风险评分 ----
-        print("  [步骤 2/4] 计算节点风险评分...")
-        risk_scores = _compute_node_risk_scores(nodes, rule_hits)
-        high_risk_nodes = [acc for acc, s in risk_scores.items() if s >= 0.5]
-        print(f"    → 高风险账户数(≥0.5): {len(high_risk_nodes)}")
+        print("  [步骤 2/6] 计算节点风险评分...")
+        risk_scores = _compute_node_risk_scores(G, rule_hits)
+        high_risk_nodes = [acc for acc, s in risk_scores.items() if s >= 50]
+        print(f"    → 高风险账户数(≥50分): {len(high_risk_nodes)}")
 
-        # ---- 3. 社区发现 ----
-        print("  [步骤 3/4] 社区发现 (Louvain简化版)...")
-        communities = _detect_communities(nodes, edges)
+        # ---- 3. 中心性分析 ----
+        print("  [步骤 3/6] 中心性分析 (PageRank / 介数 / 度中心性)...")
+        centrality = _compute_centrality(G)
+        pr_top = sorted(centrality["pagerank"].items(), key=lambda x: x[1], reverse=True)[:3]
+        bt_top = sorted(centrality["betweenness"].items(), key=lambda x: x[1], reverse=True)[:3]
+        print(f"    → PageRank Top3: {', '.join(f'{n}({v:.4f})' for n, v in pr_top)}")
+        print(f"    → 介数中心性 Top3: {', '.join(f'{n}({v:.3f})' for n, v in bt_top)}")
+
+        # ---- 4. 社区发现 ----
+        print("  [步骤 4/6] 社区发现 (Greedy Modularity)...")
+        communities = _detect_communities(G)
         print(f"    → 发现社区数(≥3节点): {len(communities)}")
         for i, comm in enumerate(communities[:5]):
             print(f"      社区 {i+1}: {len(comm)} 个账户")
 
-        # ---- 4. 识别可疑社区 ----
-        print("  [步骤 4/4] 识别可疑社区...")
-        suspicious_communities = _identify_suspicious_communities(communities, risk_scores, nodes)
+        # ---- 5. 识别可疑社区 ----
+        print("  [步骤 5/6] 识别可疑社区...")
+        suspicious_communities = _identify_suspicious_communities(
+            G, communities, risk_scores, centrality
+        )
         high_risk_comms = [c for c in suspicious_communities if c["community_risk"] >= 0.3]
         print(f"    → 可疑社区数(风险≥0.3): {len(high_risk_comms)}")
 
-        # 补充证据到可疑交易
-        enriched_hits = _enrich_suspicious_with_graph(rule_hits, suspicious_communities, risk_scores)
+        # 增强可疑交易证据
+        enriched_hits = _enrich_suspicious_with_graph(
+            G, rule_hits, suspicious_communities, risk_scores, centrality
+        )
+
+        # ---- 6. GNN 节点分类 ----
+        print("  [步骤 6/6] GNN 可疑账户识别...")
+        gnn_result = None
+        gnn_discovered_suspicious = []
+        if node_count > 5:
+            try:
+                from tools.gnn_trainer import prepare_gnn_data, train_gnn, infer_gnn
+                gnn_data = prepare_gnn_data(cleaned, enriched_hits)
+                model, metrics = train_gnn(gnn_data, epochs=200, verbose=False)
+                gnn_result = infer_gnn(model, gnn_data)
+                # GNN 输出概率(0-1)转百分制，戒律 M3: 限制 score 在 [0,1] 范围
+                gnn_scores_pct = {acc: round(max(min(score, 1), 0) * 100, 2) for acc, score in gnn_result["scores"].items()}
+                gnn_high_risk_pct = [(acc, round(max(min(score, 1), 0) * 100, 2)) for acc, score in gnn_result["high_risk"]]
+                avg_score_pct = gnn_result["stats"]["avg_score"] * 100
+                print(f"    → GNN 高风险账户(≥50分): {len(gnn_high_risk_pct)} 个")
+                print(f"    → GNN 平均风险分: {avg_score_pct:.2f}")
+                print(f"    → GNN Train Acc: {metrics['final_train_acc']:.2%} | Val Acc: {metrics['final_val_acc']:.2%}")
+                # 合并 GNN 分数到节点属性（百分制）
+                for acc, score in gnn_scores_pct.items():
+                    if acc in G.nodes:
+                        G.nodes[acc]["gnn_risk_score"] = score
+
+                # GNN 发现的高风险账户中，如有规则引擎未命中的，生成新的可疑交易
+                hit_accounts = set()
+                for s in enriched_hits:
+                    txn = s.get("transaction", {})
+                    # 戒律 M1: 使用 .get()，缺失字段不抛 KeyError
+                    from_a = txn.get("from_account")
+                    to_a = txn.get("to_account")
+                    if from_a:
+                        hit_accounts.add(from_a)
+                    if to_a:
+                        hit_accounts.add(to_a)
+
+                new_suspects = []
+                for acc, score in gnn_high_risk_pct:
+                    if acc not in hit_accounts:
+                        new_suspects.append((acc, score))
+                if new_suspects:
+                    print(f"    → GNN 新发现 {len(new_suspects)} 个规则漏掉的高风险账户")
+                    # 戒律 M1/P3: 不构造合成交易，关联真实交易作为证据
+                    for acc, score in new_suspects[:10]:  # 最多补10个，避免膨胀
+                        node_data = G.nodes[acc]
+                        # 收集该账户的真实交易作为关联证据
+                        related_txns = [
+                            t for t in cleaned
+                            if t.get("from_account") == acc or t.get("to_account") == acc
+                        ][:5]  # 最多5笔关联交易
+                        # 戒律 M1/P3: related_txns 为空时跳过（没有真实交易证据，禁止编造合成交易）
+                        if not related_txns:
+                            print(f"    → 账户[{acc}]无真实关联交易，跳过告警生成（戒律 M1/P3）")
+                            continue
+                        # 使用第一笔关联交易作为主交易（不编造新交易）
+                        primary_txn = related_txns[0]
+                        evidence = (
+                            f"GNN节点分类: 账户[{acc}]被GCN模型预测为高风险({score:.2f}分)，"
+                            f"规则引擎未命中。关联真实交易{len(related_txns)}笔，"
+                            f"入账总额{node_data.get('in_amount', 0):,.2f}，"
+                            f"出账总额{node_data.get('out_amount', 0):,.2f}"
+                        )
+                        gnn_discovered = {
+                            "transaction": primary_txn,
+                            "rule_hits": ["GNN节点分类"],
+                            "risk_score": score,
+                            "evidence": [evidence],
+                            "graph_evidence": evidence,
+                            "llm_analysis": None,
+                            "llm_confidence": None,
+                            "is_false_positive": None,
+                            "community_id": None,
+                            "gnn_alert": True,  # 标记为GNN账户级告警
+                            "related_txn_count": len(related_txns),
+                        }
+                        gnn_discovered_suspicious.append(gnn_discovered)
+            except ImportError:
+                print("    → PyTorch/PyG 未安装，跳过 GNN 分析")
+            except Exception as e:
+                print(f"    → GNN 分析失败: {str(e)}")
+        else:
+            print(f"    → 节点数({node_count})不足，跳过 GNN 分析")
 
         # 图统计
-        total_amount = sum(e["total_amount"] for e in edges)
-        avg_degree = (2 * len(edges)) / len(nodes) if nodes else 0
+        total_amount = sum(d["total_amount"] for _, _, d in G.edges(data=True))
+        avg_degree = (2 * edge_count) / node_count if node_count else 0
 
         graph_stats = {
-            "node_count": len(nodes),
-            "edge_count": len(edges),
+            "node_count": node_count,
+            "edge_count": edge_count,
             "total_transaction_amount": round(total_amount, 2),
             "avg_degree": round(avg_degree, 2),
             "community_count": len(communities),
             "suspicious_community_count": len(high_risk_comms),
             "high_risk_node_count": len(high_risk_nodes),
+            "is_directed": True,
+            "density": round(nx.density(G), 6),
         }
 
+        # 节点数据(转为列表字典)
+        nodes_data = []
+        for n, data in G.nodes(data=True):
+            node_dict = dict(data)
+            node_dict["account_id"] = n
+            nodes_data.append(node_dict)
+
+        # 边数据
+        edges_data = []
+        for u, v, data in G.edges(data=True):
+            edge_dict = dict(data)
+            edge_dict["from"] = u
+            edge_dict["to"] = v
+            edges_data.append(edge_dict)
+
         graph_data: GraphData = {
-            "nodes": list(nodes.values()),
-            "edges": edges,
-            "node_count": len(nodes),
-            "edge_count": len(edges),
+            "nodes": nodes_data,
+            "edges": edges_data,
+            "node_count": node_count,
+            "edge_count": edge_count,
             "communities": communities,
             "suspicious_communities": suspicious_communities,
             "node_risk_scores": risk_scores,
             "graph_stats": graph_stats,
+            "centrality": {
+                "pagerank": {k: round(v, 6) for k, v in centrality["pagerank"].items()},
+                "betweenness": {k: round(v, 6) for k, v in centrality["betweenness"].items()},
+                "degree_centrality": {k: round(v, 6) for k, v in centrality["degree_centrality"].items()},
+            },
+            "gnn_result": gnn_result,
         }
+
+        # 合并 GNN 新发现到可疑列表
+        all_suspicious = enriched_hits + gnn_discovered_suspicious
 
         elapsed = time.time() - start_time
         print(f"\n  {'─' * 50}")
         print(f"  图分析汇总:")
-        print(f"    - 图规模: {len(nodes)} 账户, {len(edges)} 条资金路径")
+        print(f"    - 图规模: {node_count} 账户, {edge_count} 条资金路径")
         print(f"    - 总流转金额: {total_amount:,.2f} 元")
+        print(f"    - 图密度: {graph_stats['density']:.6f}")
         print(f"    - 社区数: {len(communities)}")
         print(f"    - 可疑社区: {len(high_risk_comms)} 个")
         print(f"    - 图分析增强后可疑交易: {len(enriched_hits)} 笔")
+        if gnn_result:
+            print(f"    - GNN 高风险账户: {gnn_result['stats']['high_risk_count']} 个 (均分 {gnn_result['stats']['avg_score']:.4f})")
+            if gnn_discovered_suspicious:
+                print(f"    - GNN 新发现可疑: {len(gnn_discovered_suspicious)} 笔（规则引擎未命中）")
         print(f"  耗时: {elapsed:.2f} 秒")
         print("[Agent 3] 图分析完成")
 
         return {
             "graph_data": graph_data,
-            "graph_suspicious": enriched_hits,
-            "graph_hit_count": len(enriched_hits),
+            "graph_suspicious": all_suspicious,
+            "graph_hit_count": len(all_suspicious),
             "current_step": "graph_analyst",
             "step_times": {"graph_analyst": elapsed},
         }

@@ -20,38 +20,64 @@ from typing import Dict, List
 from graph.state import AMLState, SuspiciousTransaction, STRReport
 
 
+def _determine_primary_account(rule_hits: list, transaction: dict) -> str:
+    """根据命中规则类型智能确定主涉案方
+
+    Args:
+        rule_hits: 命中规则列表
+        transaction: 交易数据
+    Returns:
+        主涉案方账户ID
+    """
+    rules = set()
+    for hit in rule_hits:
+        if isinstance(hit, str):
+            rules.add(hit)
+
+    # 分拆转账：付款方是主涉案方（拆分方）
+    if "分拆转账" in rules:
+        return transaction.get("from_account", "UNKNOWN")
+
+    # 快进快出：收款方（中间账户）是主涉案方
+    if "快进快出" in rules:
+        return transaction.get("to_account", "UNKNOWN")
+
+    # 对敲交易：取付款方
+    if "对敲交易" in rules:
+        return transaction.get("from_account", "UNKNOWN")
+
+    # 默认：收款方
+    return transaction.get("to_account", "UNKNOWN")
+
+
 def _group_by_account(suspicious_list: List[SuspiciousTransaction]) -> Dict[str, List[SuspiciousTransaction]]:
-    """按主涉案账户分组可疑交易"""
+    """按主涉案账户分组可疑交易——根据命中规则智能确定主涉案方"""
     groups: Dict[str, List[SuspiciousTransaction]] = defaultdict(list)
 
     for s in suspicious_list:
-        txn = s["transaction"]
-        # 以收款账户为主要涉案方(资金归集方)
-        primary = txn["to_account"]
+        txn = s.get("transaction", {})
+        # 根据命中规则类型智能确定主涉案方（戒律 M1: 缺失字段不抛错，标记为 UNKNOWN）
+        primary = _determine_primary_account(s.get("rule_hits", []), txn)
         groups[primary].append(s)
-        # 如果涉及对敲等双向模式，也记录付款方
-        from_acc = txn["from_account"]
-        if from_acc != primary:
-            groups[from_acc].append(s)
 
     return groups
 
 
 def _assess_risk_level(suspicious_list: List[SuspiciousTransaction]) -> str:
-    """评估一组可疑交易的整体风险等级"""
+    """评估一组可疑交易的整体风险等级（百分制）"""
     if not suspicious_list:
         return "low"
 
-    max_score = max(s.get("risk_score", 0.5) for s in suspicious_list)
-    avg_score = sum(s.get("risk_score", 0.5) for s in suspicious_list) / len(suspicious_list)
+    max_score = max(s.get("risk_score", 50) for s in suspicious_list)
+    avg_score = sum(s.get("risk_score", 50) for s in suspicious_list) / len(suspicious_list)
     count = len(suspicious_list)
 
     # 综合判断
-    if max_score >= 0.85 or (avg_score >= 0.7 and count >= 5):
+    if max_score >= 85 or (avg_score >= 70 and count >= 5):
         return "critical"
-    elif max_score >= 0.7 or (avg_score >= 0.55 and count >= 3):
+    elif max_score >= 70 or (avg_score >= 55 and count >= 3):
         return "high"
-    elif max_score >= 0.5 or count >= 2:
+    elif max_score >= 50 or count >= 2:
         return "medium"
     else:
         return "low"
@@ -79,6 +105,80 @@ def _summarize_patterns(suspicious_list: List[SuspiciousTransaction]) -> List[st
     return patterns
 
 
+def cluster_into_cases(suspicious_list: List[SuspiciousTransaction]) -> List[dict]:
+    """
+    将可疑交易按「主账户 + 命中规则」聚成案件
+
+    同一账户、同一规则的多笔交易归为一个案件，便于分析师整体把握。
+
+    戒律:
+    - P1 不遗漏: 所有可疑交易都会被分配到某个案件
+    - P3 有证据: 每个案件有完整的证据汇总
+
+    Returns:
+        案件列表，每个案件包含:
+        - case_id: 案件ID
+        - primary_account: 主涉案账户
+        - rule_type: 规则类型
+        - transactions: 涉及交易列表
+        - txn_count: 交易数
+        - total_amount: 涉案总金额
+        - max_risk_score: 最高风险分
+        - evidence_summary: 证据汇总
+    """
+    # 先按账户分组
+    account_groups = _group_by_account(suspicious_list)
+
+    cases = []
+    case_num = 0
+    for account, txns in account_groups.items():
+        # 再按规则分组（一笔交易可能命中多规则，归到第一个规则）
+        rule_groups: Dict[str, List[SuspiciousTransaction]] = defaultdict(list)
+        for s in txns:
+            rules = s.get("rule_hits", [])
+            primary_rule = rules[0] if rules else "未知"
+            rule_groups[primary_rule].append(s)
+
+        for rule, rule_txns in rule_groups.items():
+            case_num += 1
+            total_amount = sum(
+                s.get("transaction", {}).get("amount", 0) for s in rule_txns
+            )
+            # 戒律 M3: 默认值改为 50（0-100 量纲），避免误报风险等级偏低
+            max_score = max((s.get("risk_score") or 50) for s in rule_txns)
+
+            # 证据汇总（去重前 5 条）
+            all_evidence = []
+            seen = set()
+            for s in rule_txns:
+                for ev in s.get("evidence", []):
+                    if ev not in seen:
+                        seen.add(ev)
+                        all_evidence.append(ev)
+                    if len(all_evidence) >= 5:
+                        break
+                if len(all_evidence) >= 5:
+                    break
+
+            cases.append({
+                "case_id": f"CASE-{case_num:04d}",
+                "primary_account": account,
+                "rule_type": rule,
+                "transaction_ids": [
+                    s.get("transaction", {}).get("transaction_id", "")
+                    for s in rule_txns
+                ],
+                "txn_count": len(rule_txns),
+                "total_amount": round(total_amount, 2),
+                "max_risk_score": max_score,
+                "evidence_summary": all_evidence,
+            })
+
+    # 按风险分降序
+    cases.sort(key=lambda x: x["max_risk_score"], reverse=True)
+    return cases
+
+
 def _build_str_report(
     account: str,
     suspicious_list: List[SuspiciousTransaction],
@@ -93,10 +193,18 @@ def _build_str_report(
     related_accounts = set()
     total_amount = 0.0
     for s in suspicious_list:
-        txn = s["transaction"]
-        related_accounts.add(txn["from_account"])
-        related_accounts.add(txn["to_account"])
-        total_amount += float(txn.get("amount", 0))
+        txn = s.get("transaction", {})
+        # 戒律 M1: 缺失账户字段不抛错，使用 .get()
+        from_a = txn.get("from_account")
+        to_a = txn.get("to_account")
+        if from_a:
+            related_accounts.add(from_a)
+        if to_a:
+            related_accounts.add(to_a)
+        try:
+            total_amount += float(txn.get("amount", 0))
+        except (TypeError, ValueError):
+            pass
 
     # 移除主账户自己
     related_accounts.discard(account)
@@ -126,7 +234,9 @@ def _build_str_report(
         "primary_account": account,
         "related_accounts": sorted(list(related_accounts)),
         "customer_profile": {
-            "account_type": "个人" if len(account) > 10 else "对公",  # 简化判断
+            # 戒律 M1: 不编造账户类型，缺失字段标记为 None 并加 missing 标记
+            "account_type": None,
+            "account_type_missing": True,
             "risk_rating": risk_level,
             "monitoring_status": "active",
         },
@@ -200,6 +310,9 @@ def create_report_generator_agent(llm=None):
 
         elapsed = time.time() - start_time
 
+        # 案件聚类（戒律 P3: 把关联交易聚成案件，便于整体分析）
+        cases = cluster_into_cases(confirmed)
+
         print(f"\n  {'─' * 50}")
         print(f"  报告生成汇总:")
         print(f"    - 报告总数: {len(reports)} 份")
@@ -207,18 +320,22 @@ def create_report_generator_agent(llm=None):
             if risk_counts.get(risk, 0) > 0:
                 print(f"    - {risk.upper()}风险: {risk_counts[risk]} 份")
         print(f"    - 涉及可疑交易: {len(confirmed)} 笔")
+        print(f"    - 聚类案件数: {len(cases)} 个")
         print(f"  耗时: {elapsed:.2f} 秒")
         print("[Agent 5] 报告生成完成")
 
         return {
             "str_reports": reports,
             "report_count": len(reports),
+            "suspicious_cases": cases,
+            "case_count": len(cases),
             "current_step": "report_generator",
             "step_times": {"report_generator": elapsed},
             "report_generation_stats": {
                 "total": len(reports),
                 "total_transactions": len(confirmed),
                 "by_risk": dict(risk_counts),
+                "case_count": len(cases),
             },
         }
 

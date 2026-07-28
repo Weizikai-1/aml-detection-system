@@ -40,7 +40,7 @@ class Transaction(TypedDict, total=False):
     # 风险标记
     is_suspicious: Optional[bool]        # 是否可疑
     suspicious_reason: Optional[str]     # 可疑原因
-    risk_score: Optional[float]          # 风险评分(0-1)
+    risk_score: Optional[float]          # 风险评分(0-100，0=完全正常，100=确定可疑)
 
 
 class SuspiciousTransaction(TypedDict, total=False):
@@ -50,7 +50,7 @@ class SuspiciousTransaction(TypedDict, total=False):
     """
     transaction: Transaction           # 关联的原始交易
     rule_hits: List[str]               # 命中的规则列表
-    risk_score: float                  # 综合风险评分(0-1)
+    risk_score: float                  # 综合风险评分(0-100，0=完全正常，100=确定可疑)
     evidence: List[str]                # 证据链(文本描述)
     graph_evidence: Optional[str]      # 图分析补充证据
     llm_analysis: Optional[str]        # LLM分析结论
@@ -93,16 +93,25 @@ class STRReport(TypedDict, total=False):
 
 class GraphData(TypedDict, total=False):
     """
-    图分析中间数据
+    图分析数据
+
+    节点属性(in nodes[i]):
+        account_id, in_degree, out_degree, in_amount, out_amount, total_txns
+        risk_score, pagerank, betweenness, degree_centrality
+
+    边属性(in edges[i]):
+        from, to, total_amount, txn_count, txn_ids
     """
-    nodes: List[Dict[str, Any]]        # 节点(账户)
-    edges: List[Dict[str, Any]]        # 边(交易)
-    node_count: int                    # 节点数
-    edge_count: int                    # 边数
-    communities: List[List[str]]       # 社区划分结果
-    suspicious_communities: List[Dict[str, Any]]  # 可疑社区详情
-    node_risk_scores: Dict[str, float]  # 节点风险评分
-    graph_stats: Dict[str, Any]        # 图统计指标
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+    node_count: int
+    edge_count: int
+    communities: List[List[str]]
+    suspicious_communities: List[Dict[str, Any]]
+    node_risk_scores: Dict[str, float]
+    graph_stats: Dict[str, Any]
+    centrality: Dict[str, Dict[str, float]]
+    gnn_result: Optional[Dict[str, Any]]
 
 
 # ============================================================
@@ -125,7 +134,8 @@ class AMLState(TypedDict, total=False):
     # ===== Agent 1: 数据预处理 =====
     cleaned_transactions: List[Transaction]   # 清洗后的交易
     transaction_features: Dict[str, Any]      # 全局统计特征
-    preprocessing_stats: Dict[str, int]       # 预处理统计(去重数、缺失值数等)
+    preprocessing_stats: Dict[str, Any]       # 预处理统计(去重数、缺失值数、quality_score等)
+    account_baselines: Dict[str, Dict[str, Any]]  # 账户行为基线
 
     # ===== Agent 2: 规则引擎 =====
     rule_hits: List[SuspiciousTransaction]    # 规则命中的可疑交易
@@ -164,3 +174,14 @@ class AMLState(TypedDict, total=False):
     total_processing_time: float              # 总处理时间(秒)
     step_times: Dict[str, float]              # 各步骤耗时
     execution_id: str                         # 执行ID(用于追踪)
+
+    # ===== 运行时附加字段（由 workflow.py 写入）=====
+    interrupted: bool                         # 是否被用户中断
+    value_metrics: Dict[str, Any]             # 价值证明指标
+    evaluation: Dict[str, Any]                # 自动评估结果
+    triggered_alerts: List[Dict[str, Any]]    # 触发的监控告警
+    compliance_score: float                   # 合规评分
+
+    # ===== 节点元数据（由 graph_setup.py 写入）=====
+    _node_meta: Dict[str, Any]                # 当前节点元数据(node/status/timestamp)
+    _node_error: Dict[str, Any]               # 当前节点错误信息(降级时填充)

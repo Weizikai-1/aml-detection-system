@@ -28,6 +28,7 @@ from agents import (
     create_rule_engine_agent,
     create_graph_analyst_agent,
     create_llm_reviewer_agent,
+    create_llm_semantic_agent,
     create_report_generator_agent,
     create_compliance_auditor_agent,
 )
@@ -179,6 +180,11 @@ class StandardNodeTemplate:
                 output["llm_confirmed"] = []
                 output["false_positives"] = []
                 output["llm_stats"] = {"degraded": True}
+            elif self.node_name == "语义裁决":
+                # 语义裁决失败：返回空结果，报告生成仍可基于 llm_confirmed
+                output["semantic_results"] = []
+                output["adjudications"] = []
+                output["risk_report"] = ""
             elif self.node_name == "报告生成":
                 # 报告生成失败：返回空列表
                 output["str_reports"] = []
@@ -220,6 +226,7 @@ class StandardNodeTemplate:
             "str_reports", "final_reports", "rejected_reports",
             "graph_data", "llm_reviewed", "llm_confirmed",
             "false_positives", "human_review_tasks",
+            "semantic_results", "adjudications", "risk_report",
         }
         log_data = {
             "execution_id": execution_id,
@@ -300,6 +307,13 @@ class GraphSetup:
         """
         构建完整的反洗钱工作流图
 
+        工作流:
+        START → 数据预处理 → 规则引擎 → [条件1]
+                                         ↓
+                            有可疑 → 图分析 → LLM深审 → [条件2]
+                              ↑                              ↓
+                            END                       有确认 → 语义裁决 → 报告生成 → 合规审核 → END
+
         Returns:
             已配置好节点和边的 StateGraph 实例(未编译)
         """
@@ -308,6 +322,7 @@ class GraphSetup:
         rule_engine = create_rule_engine_agent(self.llm)
         graph_analyst = create_graph_analyst_agent(self.llm)
         llm_reviewer = create_llm_reviewer_agent(self.llm)
+        semantic_agent = create_llm_semantic_agent(self.llm)
         report_generator = create_report_generator_agent(self.llm)
         compliance_auditor = create_compliance_auditor_agent(self.llm)
 
@@ -319,6 +334,7 @@ class GraphSetup:
         workflow.add_node("规则引擎", create_standard_node("规则引擎", rule_engine))
         workflow.add_node("图分析", create_standard_node("图分析", graph_analyst))
         workflow.add_node("LLM深审", create_standard_node("LLM深审", llm_reviewer))
+        workflow.add_node("语义裁决", create_standard_node("语义裁决", semantic_agent))
         workflow.add_node("报告生成", create_standard_node("报告生成", report_generator))
         workflow.add_node("合规审核", create_standard_node("合规审核", compliance_auditor))
 
@@ -340,17 +356,18 @@ class GraphSetup:
         # 固定边: 图分析 → LLM深审
         workflow.add_edge("图分析", "LLM深审")
 
-        # 条件边2: LLM深审 → 报告生成 / END
+        # 条件边2: LLM深审 → 语义裁决 / END
         workflow.add_conditional_edges(
             "LLM深审",
             self.conditional_logic.should_continue_after_llm_review,
             {
-                "报告生成": "报告生成",
+                "语义裁决": "语义裁决",
                 "END": END,
             },
         )
 
-        # 固定边: 报告生成 → 合规审核 → END
+        # 固定边: 语义裁决 → 报告生成 → 合规审核 → END
+        workflow.add_edge("语义裁决", "报告生成")
         workflow.add_edge("报告生成", "合规审核")
         workflow.add_edge("合规审核", END)
 

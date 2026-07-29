@@ -189,6 +189,59 @@ def _compute_account_baselines(transactions: list) -> dict:
     return baselines
 
 
+def _try_paysim_enhancement(cleaned: list) -> dict:
+    """
+    检测并增强 PaySim 格式数据
+
+    当交易数据包含 PaySim 特征字段（step/type/isFraud）时，
+    使用 dataset_builder 构建图数据，为后续 GNN 分析做准备。
+
+    戒律 M1: 只处理真实存在的字段，不编造
+    戒律 P2: 异常时静默跳过，不阻塞主流程
+
+    Returns:
+        PaySim 特征字典，或 None（非 PaySim 格式）
+    """
+    if not cleaned:
+        return None
+
+    # 检测 PaySim 格式: 至少 50% 的交易包含 step 和 type 字段
+    sample = cleaned[:100]
+    has_paysim_fields = sum(
+        1 for t in sample if "step" in t and "type" in t
+    )
+    if has_paysim_fields < len(sample) * 0.5:
+        return None
+
+    try:
+        import pandas as pd
+        from tools.dataset_builder import AMLGraphBuilder
+
+        # 将交易列表转为 DataFrame
+        df = pd.DataFrame(cleaned)
+
+        # 确保必要列存在
+        required = ["nameOrig", "nameDest", "amount", "step", "type"]
+        for col in required:
+            if col not in df.columns:
+                return None
+
+        # 构建图
+        builder = AMLGraphBuilder()
+        builder.build_from_transactions(df, use_transaction_nodes=False)
+
+        stats = builder.get_statistics()
+        return {
+            "graph_stats": stats,
+            "num_nodes": stats["num_nodes"],
+            "num_edges": stats["num_edges"],
+            "fraud_ratio": stats.get("fraud_ratio", 0),
+        }
+    except Exception as e:
+        print(f"  - PaySim 特征增强跳过: {e}")
+        return None
+
+
 def create_data_preprocessor_agent(llm=None):
     """
     创建数据预处理Agent
@@ -414,6 +467,10 @@ def create_data_preprocessor_agent(llm=None):
             if b["cv_amount"] > 1.5 and b["total_txns"] >= 5
         ]
 
+        # ---- 5. PaySim 数据集特征增强 ----
+        # 当检测到 PaySim 格式数据时，使用 dataset_builder 做深度特征工程
+        paysim_features = _try_paysim_enhancement(cleaned)
+
         elapsed = time.time() - start_time
         print(f"  - 交易总金额: {features['total_amount']:,.2f} 元")
         print(f"  - 平均金额: {features['avg_amount']:,.2f} 元")
@@ -422,10 +479,12 @@ def create_data_preprocessor_agent(llm=None):
         print(f"  - 周末交易: {weekend_count} 笔 ({features['weekend_ratio']:.1%})")
         print(f"  - 已标注可疑: {labeled_suspicious} 笔")
         print(f"  - 行为基线: {len(account_baselines)} 个账户，高波动账户 {len(high_volatility_accounts)} 个")
+        if paysim_features:
+            print(f"  - PaySim 特征增强: 已启用 (图构建就绪)")
         print(f"  耗时: {elapsed:.2f} 秒")
         print("[Agent 1] 数据预处理完成")
 
-        return {
+        result = {
             "cleaned_transactions": cleaned,
             "transaction_features": features,
             "preprocessing_stats": stats,
@@ -433,5 +492,8 @@ def create_data_preprocessor_agent(llm=None):
             "current_step": "data_preprocessor",
             "step_times": {"data_preprocessor": elapsed},
         }
+        if paysim_features:
+            result["paysim_features"] = paysim_features
+        return result
 
     return data_preprocessor_node

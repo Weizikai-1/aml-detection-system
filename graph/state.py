@@ -136,6 +136,7 @@ class AMLState(TypedDict, total=False):
     transaction_features: Dict[str, Any]      # 全局统计特征
     preprocessing_stats: Dict[str, Any]       # 预处理统计(去重数、缺失值数、quality_score等)
     account_baselines: Dict[str, Dict[str, Any]]  # 账户行为基线
+    paysim_features: Optional[Dict[str, Any]]  # PaySim 数据集特征(存在则启用 EdgeGNN)
 
     # ===== Agent 2: 规则引擎 =====
     rule_hits: List[SuspiciousTransaction]    # 规则命中的可疑交易
@@ -154,6 +155,11 @@ class AMLState(TypedDict, total=False):
     false_positives: List[SuspiciousTransaction]  # LLM 判定误报
     llm_analysis_count: int                       # LLM 分析数量
     llm_stats: Dict[str, Any]                     # LLM 统计
+
+    # ===== Agent 4.5: LLM 语义裁决 =====
+    semantic_results: List[Dict[str, Any]]         # 语义异常检测结果
+    adjudications: List[Dict[str, Any]]            # 混合裁决结果(规则+GNN+语义)
+    risk_report: str                               # LLM 生成的自然语言风险报告
 
     # ===== Agent 5: 报告生成 =====
     str_reports: List[STRReport]             # 生成的 STR 报告

@@ -10,12 +10,14 @@ Agent 3: 图分析 Agent
 3. 介数中心性识别资金中转枢纽
 4. 社区发现(Greedy Modularity)检测团伙结构
 5. 可疑社区识别 + 交易证据增强
-6. GNN 节点分类: 训练 GCN 模型对账户进行可疑/正常二分类
+6. GNN 节点分类:
+   - PaySim 数据 + PyG 可用 → EdgeAwareGAT (边特征增强，可解释注意力)
+   - 否则降级到 GCN/GAT (仅拓扑结构)
 7. 合并 GNN 风险分到节点属性，补充图数据返回
 """
 import time
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 import networkx as nx
 from graph.state import AMLState, SuspiciousTransaction, Transaction, GraphData
 
@@ -367,6 +369,235 @@ def _enrich_suspicious_with_graph(
     return enriched
 
 
+def _run_edge_gnn(
+    cleaned: List[Transaction],
+    enriched_hits: List[SuspiciousTransaction],
+) -> Tuple[Optional[dict], Optional[dict], str]:
+    """
+    使用 EdgeAwareGAT 进行节点可疑性分类（边特征增强）
+
+    当数据为 PaySim 格式且 PyG 可用时启用，利用交易边特征
+    (对数金额/交易类型/时间步/大额标记) 显式参与消息传递。
+
+    戒律:
+    - M1: 基于真实图数据，不编造
+    - M2: 边特征在消息传递中被显式利用
+    - M3: 输出概率限制在 [0, 1]
+    - P2: 异常静默跳过，不阻塞主流程
+
+    Returns:
+        (gnn_result, metrics, model_label) 或 (None, None, "")
+    """
+    try:
+        import pandas as pd
+        import torch
+        import torch.nn.functional as F
+        from tools.dataset_builder import AMLGraphBuilder
+        from tools.gnn_edge_model import create_edge_gnn, is_edge_gnn_available
+    except ImportError:
+        return None, None, ""
+
+    if not is_edge_gnn_available():
+        return None, None, ""
+
+    # 1. 字段检测：必须有 PaySim 必需列
+    df = pd.DataFrame(cleaned)
+    required = ["nameOrig", "nameDest", "amount", "step", "type"]
+    if not all(c in df.columns for c in required):
+        return None, None, ""
+
+    # 2. 构建同构图（账户-账户，带边特征）
+    builder = AMLGraphBuilder()
+    builder.build_from_transactions(df, use_transaction_nodes=False)
+
+    data = builder.to_pyg_data()
+
+    # 3. 用规则命中结果作为弱监督标签（risk_score ≥ 50 → 可疑）
+    rule_risk_scores: Dict[str, float] = {}
+    for s in enriched_hits:
+        txn = s.get("transaction") or {}
+        try:
+            score = float(s.get("risk_score", 50))
+        except (TypeError, ValueError):
+            score = 50.0
+        for acc in (txn.get("from_account"), txn.get("to_account")):
+            if acc:
+                rule_risk_scores[acc] = max(rule_risk_scores.get(acc, 0), score)
+
+    labels = torch.zeros(builder.node_features.shape[0], dtype=torch.long)
+    for acc, idx in builder.node_to_idx.items():
+        if rule_risk_scores.get(acc, 0) >= 50:
+            labels[idx] = 1
+    data.y = labels
+
+    # 4. 创建 EdgeAwareGAT 模型
+    in_channels = data.x.size(1)
+    edge_dim = data.edge_attr.size(1)
+    model = create_edge_gnn(
+        model_type="edge_aware_gat",
+        in_channels=in_channels,
+        hidden_channels=32,
+        edge_dim=edge_dim,
+        heads=2,
+        dropout=0.3,
+    )
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+
+    # 5. 8:2 划分训练/验证集
+    n = data.num_nodes
+    perm = torch.randperm(n)
+    train_mask = torch.zeros(n, dtype=torch.bool)
+    val_mask = torch.zeros(n, dtype=torch.bool)
+    split = int(0.8 * n)
+    train_mask[perm[:split]] = True
+    val_mask[perm[split:]] = True
+
+    metrics = {"final_train_acc": 0.0, "final_val_acc": 0.0, "epochs": 100}
+
+    # 6. 训练（戒律 P4: 训练集为空时跳过避免 cross_entropy 抛错）
+    if train_mask.sum() > 0:
+        for _ in range(100):
+            model.train()
+            optimizer.zero_grad()
+            out = model(data.x, data.edge_index, data.edge_attr)
+            loss = F.cross_entropy(out[train_mask], data.y[train_mask])
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+        with torch.no_grad():
+            pred = model(data.x, data.edge_index, data.edge_attr).argmax(dim=1)
+            metrics["final_train_acc"] = (
+                (pred[train_mask] == data.y[train_mask]).float().mean().item()
+            )
+            if val_mask.sum() > 0:
+                metrics["final_val_acc"] = (
+                    (pred[val_mask] == data.y[val_mask]).float().mean().item()
+                )
+
+    # 7. 推理（戒律 M3: softmax 概率 ∈ [0, 1]）
+    model.eval()
+    with torch.no_grad():
+        probs = model.predict(data.x, data.edge_index, data.edge_attr).cpu().numpy()
+
+    idx_to_account = {v: k for k, v in builder.node_to_idx.items()}
+    scores = {idx_to_account[i]: float(probs[i]) for i in range(len(probs))}
+    high_risk = [(acc, s) for acc, s in scores.items() if s > 0.5]
+    high_risk.sort(key=lambda x: x[1], reverse=True)
+
+    stats = {
+        "total_nodes": len(scores),
+        "high_risk_count": len(high_risk),
+        "high_risk_ratio": len(high_risk) / len(scores) if scores else 0,
+        "avg_score": float(probs.mean()) if len(probs) > 0 else 0.0,
+        "max_score": float(probs.max()) if len(probs) > 0 else 0.0,
+        "min_score": float(probs.min()) if len(probs) > 0 else 0.0,
+    }
+
+    gnn_result = {
+        "scores": scores,
+        "high_risk": high_risk,
+        "stats": stats,
+        "model_type": "edge_aware_gat",
+    }
+    return gnn_result, metrics, "EdgeAwareGAT"
+
+
+def _generate_gnn_alerts(
+    gnn_result: dict,
+    metrics: Optional[dict],
+    model_label: str,
+    enriched_hits: List[SuspiciousTransaction],
+    cleaned: List[Transaction],
+    G: nx.DiGraph,
+) -> List[SuspiciousTransaction]:
+    """
+    将 GNN 高风险账户转为可疑交易告警（仅对规则未命中账户）
+
+    戒律:
+    - M1/P3: 不编造合成交易，关联真实交易作为证据
+    - M3: 风险分映射到 [0, 100]
+    - P1: 高风险节点必须有高置信度
+
+    Returns:
+        新发现的可疑交易列表
+    """
+    # 概率 → 百分制（戒律 M3: 双向夹紧到 [0, 100]）
+    gnn_scores_pct = {
+        acc: round(max(min(s, 1), 0) * 100, 2)
+        for acc, s in gnn_result["scores"].items()
+    }
+    gnn_high_risk_pct = [
+        (acc, round(max(min(s, 1), 0) * 100, 2))
+        for acc, s in gnn_result["high_risk"]
+    ]
+    avg_score_pct = gnn_result["stats"]["avg_score"] * 100
+
+    print(f"    → {model_label} 高风险账户(≥50分): {len(gnn_high_risk_pct)} 个")
+    print(f"    → {model_label} 平均风险分: {avg_score_pct:.2f}")
+    if metrics:
+        print(
+            f"    → {model_label} Train Acc: {metrics['final_train_acc']:.2%} | "
+            f"Val Acc: {metrics['final_val_acc']:.2%}"
+        )
+
+    # 合并 GNN 分数到节点属性
+    for acc, score in gnn_scores_pct.items():
+        if acc in G.nodes:
+            G.nodes[acc]["gnn_risk_score"] = score
+
+    # 已命中账户集合
+    hit_accounts = set()
+    for s in enriched_hits:
+        txn = s.get("transaction", {})
+        for k in ("from_account", "to_account"):
+            v = txn.get(k)
+            if v:
+                hit_accounts.add(v)
+
+    # 新发现告警
+    new_suspects = [
+        (acc, score) for acc, score in gnn_high_risk_pct
+        if acc not in hit_accounts
+    ]
+    if new_suspects:
+        print(f"    → {model_label} 新发现 {len(new_suspects)} 个规则漏掉的高风险账户")
+
+    discovered: List[SuspiciousTransaction] = []
+    for acc, score in new_suspects[:10]:  # 最多 10 个，避免膨胀
+        node_data = G.nodes[acc]
+        related_txns = [
+            t for t in cleaned
+            if t.get("from_account") == acc or t.get("to_account") == acc
+        ][:5]
+        # 戒律 M1/P3: 无真实关联交易则跳过，禁止编造合成交易
+        if not related_txns:
+            print(f"    → 账户[{acc}]无真实关联交易，跳过告警生成（戒律 M1/P3）")
+            continue
+        primary_txn = related_txns[0]
+        evidence = (
+            f"{model_label}节点分类: 账户[{acc}]被预测为高风险({score:.2f}分)，"
+            f"规则引擎未命中。关联真实交易{len(related_txns)}笔，"
+            f"入账总额{node_data.get('in_amount', 0):,.2f}，"
+            f"出账总额{node_data.get('out_amount', 0):,.2f}"
+        )
+        discovered.append({
+            "transaction": primary_txn,
+            "rule_hits": [f"{model_label}节点分类"],
+            "risk_score": score,
+            "evidence": [evidence],
+            "graph_evidence": evidence,
+            "llm_analysis": None,
+            "llm_confidence": None,
+            "is_false_positive": None,
+            "community_id": None,
+            "gnn_alert": True,
+            "related_txn_count": len(related_txns),
+        })
+    return discovered
+
+
 def create_graph_analyst_agent(llm=None):
     """
     创建图分析Agent
@@ -457,81 +688,48 @@ def create_graph_analyst_agent(llm=None):
         # ---- 6. GNN 节点分类 ----
         print("  [步骤 6/6] GNN 可疑账户识别...")
         gnn_result = None
-        gnn_discovered_suspicious = []
+        gnn_metrics = None
+        gnn_model_label = ""
+        gnn_discovered_suspicious: List[SuspiciousTransaction] = []
+
         if node_count > 5:
-            try:
-                from tools.gnn_trainer import prepare_gnn_data, train_gnn, infer_gnn
-                gnn_data = prepare_gnn_data(cleaned, enriched_hits)
-                model, metrics = train_gnn(gnn_data, epochs=200, verbose=False)
-                gnn_result = infer_gnn(model, gnn_data)
-                # GNN 输出概率(0-1)转百分制，戒律 M3: 限制 score 在 [0,1] 范围
-                gnn_scores_pct = {acc: round(max(min(score, 1), 0) * 100, 2) for acc, score in gnn_result["scores"].items()}
-                gnn_high_risk_pct = [(acc, round(max(min(score, 1), 0) * 100, 2)) for acc, score in gnn_result["high_risk"]]
-                avg_score_pct = gnn_result["stats"]["avg_score"] * 100
-                print(f"    → GNN 高风险账户(≥50分): {len(gnn_high_risk_pct)} 个")
-                print(f"    → GNN 平均风险分: {avg_score_pct:.2f}")
-                print(f"    → GNN Train Acc: {metrics['final_train_acc']:.2%} | Val Acc: {metrics['final_val_acc']:.2%}")
-                # 合并 GNN 分数到节点属性（百分制）
-                for acc, score in gnn_scores_pct.items():
-                    if acc in G.nodes:
-                        G.nodes[acc]["gnn_risk_score"] = score
+            # 优先尝试 EdgeAwareGAT（PaySim 数据 + PyG 可用）
+            # 戒律 P2: 异常静默降级，不阻塞主流程
+            if state.get("paysim_features") is not None:
+                try:
+                    gnn_result, gnn_metrics, gnn_model_label = _run_edge_gnn(
+                        cleaned, enriched_hits
+                    )
+                    if gnn_result is not None:
+                        print(f"    → 使用 EdgeAwareGAT (边特征增强)")
+                except Exception as e:
+                    print(f"    → EdgeAwareGAT 失败，降级到标准 GNN: {e}")
+                    gnn_result = None
 
-                # GNN 发现的高风险账户中，如有规则引擎未命中的，生成新的可疑交易
-                hit_accounts = set()
-                for s in enriched_hits:
-                    txn = s.get("transaction", {})
-                    # 戒律 M1: 使用 .get()，缺失字段不抛 KeyError
-                    from_a = txn.get("from_account")
-                    to_a = txn.get("to_account")
-                    if from_a:
-                        hit_accounts.add(from_a)
-                    if to_a:
-                        hit_accounts.add(to_a)
+            # 降级路径: 标准 GCN/GAT (仅拓扑结构)
+            if gnn_result is None:
+                try:
+                    from tools.gnn_trainer import prepare_gnn_data, train_gnn, infer_gnn
+                    gnn_data = prepare_gnn_data(cleaned, enriched_hits)
+                    model, gnn_metrics = train_gnn(gnn_data, epochs=200, verbose=False)
+                    gnn_result = infer_gnn(model, gnn_data)
+                    gnn_model_label = "GNN"
+                    print(f"    → 使用标准 GNN (GCN/GAT)")
+                except ImportError:
+                    print("    → PyTorch/PyG 未安装，跳过 GNN 分析")
+                except Exception as e:
+                    print(f"    → GNN 分析失败: {str(e)}")
 
-                new_suspects = []
-                for acc, score in gnn_high_risk_pct:
-                    if acc not in hit_accounts:
-                        new_suspects.append((acc, score))
-                if new_suspects:
-                    print(f"    → GNN 新发现 {len(new_suspects)} 个规则漏掉的高风险账户")
-                    # 戒律 M1/P3: 不构造合成交易，关联真实交易作为证据
-                    for acc, score in new_suspects[:10]:  # 最多补10个，避免膨胀
-                        node_data = G.nodes[acc]
-                        # 收集该账户的真实交易作为关联证据
-                        related_txns = [
-                            t for t in cleaned
-                            if t.get("from_account") == acc or t.get("to_account") == acc
-                        ][:5]  # 最多5笔关联交易
-                        # 戒律 M1/P3: related_txns 为空时跳过（没有真实交易证据，禁止编造合成交易）
-                        if not related_txns:
-                            print(f"    → 账户[{acc}]无真实关联交易，跳过告警生成（戒律 M1/P3）")
-                            continue
-                        # 使用第一笔关联交易作为主交易（不编造新交易）
-                        primary_txn = related_txns[0]
-                        evidence = (
-                            f"GNN节点分类: 账户[{acc}]被GCN模型预测为高风险({score:.2f}分)，"
-                            f"规则引擎未命中。关联真实交易{len(related_txns)}笔，"
-                            f"入账总额{node_data.get('in_amount', 0):,.2f}，"
-                            f"出账总额{node_data.get('out_amount', 0):,.2f}"
-                        )
-                        gnn_discovered = {
-                            "transaction": primary_txn,
-                            "rule_hits": ["GNN节点分类"],
-                            "risk_score": score,
-                            "evidence": [evidence],
-                            "graph_evidence": evidence,
-                            "llm_analysis": None,
-                            "llm_confidence": None,
-                            "is_false_positive": None,
-                            "community_id": None,
-                            "gnn_alert": True,  # 标记为GNN账户级告警
-                            "related_txn_count": len(related_txns),
-                        }
-                        gnn_discovered_suspicious.append(gnn_discovered)
-            except ImportError:
-                print("    → PyTorch/PyG 未安装，跳过 GNN 分析")
-            except Exception as e:
-                print(f"    → GNN 分析失败: {str(e)}")
+            # 生成告警（EdgeGNN 与标准 GNN 共用逻辑）
+            if gnn_result is not None:
+                gnn_discovered_suspicious = _generate_gnn_alerts(
+                    gnn_result,
+                    gnn_metrics,
+                    gnn_model_label,
+                    enriched_hits,
+                    cleaned,
+                    G,
+                )
         else:
             print(f"    → 节点数({node_count})不足，跳过 GNN 分析")
 
@@ -596,9 +794,10 @@ def create_graph_analyst_agent(llm=None):
         print(f"    - 可疑社区: {len(high_risk_comms)} 个")
         print(f"    - 图分析增强后可疑交易: {len(enriched_hits)} 笔")
         if gnn_result:
-            print(f"    - GNN 高风险账户: {gnn_result['stats']['high_risk_count']} 个 (均分 {gnn_result['stats']['avg_score']:.4f})")
+            label = gnn_model_label or "GNN"
+            print(f"    - {label} 高风险账户: {gnn_result['stats']['high_risk_count']} 个 (均分 {gnn_result['stats']['avg_score']:.4f})")
             if gnn_discovered_suspicious:
-                print(f"    - GNN 新发现可疑: {len(gnn_discovered_suspicious)} 笔（规则引擎未命中）")
+                print(f"    - {label} 新发现可疑: {len(gnn_discovered_suspicious)} 笔（规则引擎未命中）")
         print(f"  耗时: {elapsed:.2f} 秒")
         print("[Agent 3] 图分析完成")
 

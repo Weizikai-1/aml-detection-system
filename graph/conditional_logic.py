@@ -13,7 +13,7 @@ class ConditionalLogic:
 
     包含两个关键分支点:
     1. 规则引擎后: 有可疑 → 图分析 / 无可疑 → END
-    2. LLM深审后: 有确认可疑 → 报告生成 / 全是误报 → END
+    2. LLM深审后: 有确认可疑 → 语义裁决 / 全是误报 → END
     """
 
     def __init__(self, min_rule_hits: int = 1):
@@ -67,7 +67,7 @@ class ConditionalLogic:
         """
         LLM深审后的条件判断
 
-        有确认可疑 → 进入报告生成
+        有确认可疑 → 进入语义裁决（混合裁决+报告生成）
         全部误报 → 结束
 
         戒律 P1: LLM 深审节点失败时（llm_reviewed is None 或 _node_meta.status == "error"），
@@ -75,16 +75,16 @@ class ConditionalLogic:
         降级生成的报告会在 report_generator 中标记 degraded=True，强制人工审核。
 
         Returns:
-            "报告生成" 或 "END"
+            "语义裁决" 或 "END"
         """
         confirmed = state.get("llm_confirmed", []) or []
         if len(confirmed) > 0:
-            return "报告生成"
-        # 降级：LLM 未审核（llm_reviewed is None）但有规则命中时，仍生成报告
+            return "语义裁决"
+        # 降级：LLM 未审核（llm_reviewed is None）但有规则命中时，仍进入语义裁决
         # 避免LLM不可用时遗漏高风险交易（戒律 P1）
         llm_reviewed = state.get("llm_reviewed")
         if llm_reviewed is None:
             rule_hits = state.get("rule_hits", []) or []
             if len(rule_hits) > 0:
-                return "报告生成"
+                return "语义裁决"
         return "END"

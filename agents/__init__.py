@@ -8,6 +8,7 @@ from agents.data_preprocessor import create_data_preprocessor_agent
 from agents.rule_engine import create_rule_engine_agent
 from agents.graph_analyst import create_graph_analyst_agent
 from agents.llm_reviewer import create_llm_reviewer_agent
+from agents.llm_semantic_analyzer import create_llm_semantic_agent
 from agents.report_generator import create_report_generator_agent
 from agents.compliance_auditor import create_compliance_auditor_agent
 
@@ -16,6 +17,7 @@ __all__ = [
     "create_rule_engine_agent",
     "create_graph_analyst_agent",
     "create_llm_reviewer_agent",
+    "create_llm_semantic_agent",
     "create_report_generator_agent",
     "create_compliance_auditor_agent",
 ]

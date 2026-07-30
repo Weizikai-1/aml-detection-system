@@ -74,10 +74,10 @@ EXPOSE 8501
 USER app
 
 # ===== 健康检查 =====
-# 使用 Python 标准库（不依赖 requests 库）
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)" || exit 1
+# 当前为 CLI 模式，无 HTTP health endpoint
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+#     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)" || exit 1
 
 # ===== 启动命令 =====
-# 默认启动 API 服务（可通过 docker-compose 覆盖）
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# CLI 模式: 运行规则引擎评估
+CMD ["python", "scripts/evaluate.py"]

@@ -18,6 +18,9 @@ import json
 import os
 from typing import List, Dict, Any, Optional, Tuple
 from graph.state import AMLState, SuspiciousTransaction
+from utils import get_logger
+
+logger = get_logger("llm_semantic")
 
 
 # ============================================================
@@ -119,6 +122,7 @@ def _detect_semantic_anomaly(
         return {"anomaly_detected": False, "explanation": "LLM 响应格式异常"}
 
     except Exception as e:
+        logger.error(f"语义分析失败: {e}", exc_info=True)
         # 降级: 基于规则的简单检测
         return _fallback_semantic_check(transaction)
 
@@ -295,6 +299,7 @@ def hybrid_adjudication(
             return _fallback_hybrid(rule_score, gnn_score, semantic_result, rule_hits)
 
     except Exception as e:
+        logger.error(f"LLM裁决失败: {e}", exc_info=True)
         return _fallback_hybrid(rule_score, gnn_score, semantic_result, rule_hits)
 
 
@@ -456,6 +461,7 @@ def generate_risk_report(
         response = llm.invoke(messages)
         return response.content if hasattr(response, "content") else str(response)
     except Exception as e:
+        logger.error(f"语义分析失败: {e}", exc_info=True)
         return _generate_fallback_report(suspicious_transactions, adjudications)
 
 
@@ -564,6 +570,7 @@ def create_llm_semantic_agent(llm: Any = None):
             try:
                 result = _detect_semantic_anomaly(llm, txn)
             except Exception as e:
+                logger.error(f"语义分析失败: {e}", exc_info=True)
                 result = _fallback_semantic_check(txn)
                 result["_degraded"] = True
                 result["_error"] = str(e)[:80]
@@ -599,6 +606,7 @@ def create_llm_semantic_agent(llm: Any = None):
                     llm, txn, rule_score, gnn_score, semantic_result, rule_hits
                 )
             except Exception as e:
+                logger.error(f"LLM裁决失败: {e}", exc_info=True)
                 # 降级：使用 fallback 裁决
                 adjudication = _fallback_hybrid(rule_score, gnn_score, semantic_result, rule_hits)
                 adjudication["_degraded"] = True
@@ -614,6 +622,7 @@ def create_llm_semantic_agent(llm: Any = None):
         try:
             report = generate_risk_report(llm, suspicious_list, adjudications, graph_analysis)
         except Exception as e:
+            logger.error(f"语义分析失败: {e}", exc_info=True)
             report = _generate_fallback_report(suspicious_list, adjudications)
 
         elapsed = time.time() - start_time

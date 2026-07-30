@@ -20,6 +20,10 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 import networkx as nx
 from graph.state import AMLState, SuspiciousTransaction, Transaction, GraphData
+from utils import get_logger
+
+logger = get_logger("graph_analyst")
+
 
 def _build_graph(transactions: List[Transaction]) -> nx.DiGraph:
     """
@@ -534,10 +538,10 @@ def _generate_gnn_alerts(
     ]
     avg_score_pct = gnn_result["stats"]["avg_score"] * 100
 
-    print(f"    → {model_label} 高风险账户(≥50分): {len(gnn_high_risk_pct)} 个")
-    print(f"    → {model_label} 平均风险分: {avg_score_pct:.2f}")
+    logger.info(f"    → {model_label} 高风险账户(≥50分): {len(gnn_high_risk_pct)} 个")
+    logger.info(f"    → {model_label} 平均风险分: {avg_score_pct:.2f}")
     if metrics:
-        print(
+        logger.info(
             f"    → {model_label} Train Acc: {metrics['final_train_acc']:.2%} | "
             f"Val Acc: {metrics['final_val_acc']:.2%}"
         )
@@ -562,7 +566,7 @@ def _generate_gnn_alerts(
         if acc not in hit_accounts
     ]
     if new_suspects:
-        print(f"    → {model_label} 新发现 {len(new_suspects)} 个规则漏掉的高风险账户")
+        logger.info(f"    → {model_label} 新发现 {len(new_suspects)} 个规则漏掉的高风险账户")
 
     discovered: List[SuspiciousTransaction] = []
     for acc, score in new_suspects[:10]:  # 最多 10 个，避免膨胀
@@ -573,7 +577,7 @@ def _generate_gnn_alerts(
         ][:5]
         # 戒律 M1/P3: 无真实关联交易则跳过，禁止编造合成交易
         if not related_txns:
-            print(f"    → 账户[{acc}]无真实关联交易，跳过告警生成（戒律 M1/P3）")
+            logger.info(f"    → 账户[{acc}]无真实关联交易，跳过告警生成（戒律 M1/P3）")
             continue
         primary_txn = related_txns[0]
         evidence = (
@@ -622,18 +626,18 @@ def create_graph_analyst_agent(llm=None):
         6. 增强可疑交易证据
         """
         start_time = time.time()
-        print("\n" + "=" * 60)
-        print("[Agent 3] 图分析 Agent 启动")
-        print("=" * 60)
+        logger.info("\n" + "=" * 60)
+        logger.info("[Agent 3] 图分析 Agent 启动")
+        logger.info("=" * 60)
 
         cleaned = state.get("cleaned_transactions", [])
         rule_hits = state.get("rule_hits", [])
 
-        print(f"  输入交易数: {len(cleaned)}")
-        print(f"  规则命中数: {len(rule_hits)}")
+        logger.info(f"  输入交易数: {len(cleaned)}")
+        logger.info(f"  规则命中数: {len(rule_hits)}")
 
         if len(cleaned) == 0:
-            print("[Agent 3] 无交易数据，跳过图分析")
+            logger.info("[Agent 3] 无交易数据，跳过图分析")
             return {
                 "graph_data": {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0,
                                "communities": [], "suspicious_communities": [],
@@ -645,40 +649,40 @@ def create_graph_analyst_agent(llm=None):
             }
 
         # ---- 1. 构建图 ----
-        print("  [步骤 1/6] 构建资金流向图...")
+        logger.info("  [步骤 1/6] 构建资金流向图...")
         G = _build_graph(cleaned)
         node_count = G.number_of_nodes()
         edge_count = G.number_of_edges()
-        print(f"    → 节点数: {node_count}, 边数: {edge_count}")
+        logger.info(f"    → 节点数: {node_count}, 边数: {edge_count}")
 
         # ---- 2. 计算节点风险评分 ----
-        print("  [步骤 2/6] 计算节点风险评分...")
+        logger.info("  [步骤 2/6] 计算节点风险评分...")
         risk_scores = _compute_node_risk_scores(G, rule_hits)
         high_risk_nodes = [acc for acc, s in risk_scores.items() if s >= 50]
-        print(f"    → 高风险账户数(≥50分): {len(high_risk_nodes)}")
+        logger.info(f"    → 高风险账户数(≥50分): {len(high_risk_nodes)}")
 
         # ---- 3. 中心性分析 ----
-        print("  [步骤 3/6] 中心性分析 (PageRank / 介数 / 度中心性)...")
+        logger.info("  [步骤 3/6] 中心性分析 (PageRank / 介数 / 度中心性)...")
         centrality = _compute_centrality(G)
         pr_top = sorted(centrality["pagerank"].items(), key=lambda x: x[1], reverse=True)[:3]
         bt_top = sorted(centrality["betweenness"].items(), key=lambda x: x[1], reverse=True)[:3]
-        print(f"    → PageRank Top3: {', '.join(f'{n}({v:.4f})' for n, v in pr_top)}")
-        print(f"    → 介数中心性 Top3: {', '.join(f'{n}({v:.3f})' for n, v in bt_top)}")
+        logger.info(f"    → PageRank Top3: {', '.join(f'{n}({v:.4f})' for n, v in pr_top)}")
+        logger.info(f"    → 介数中心性 Top3: {', '.join(f'{n}({v:.3f})' for n, v in bt_top)}")
 
         # ---- 4. 社区发现 ----
-        print("  [步骤 4/6] 社区发现 (Greedy Modularity)...")
+        logger.info("  [步骤 4/6] 社区发现 (Greedy Modularity)...")
         communities = _detect_communities(G)
-        print(f"    → 发现社区数(≥3节点): {len(communities)}")
+        logger.info(f"    → 发现社区数(≥3节点): {len(communities)}")
         for i, comm in enumerate(communities[:5]):
-            print(f"      社区 {i+1}: {len(comm)} 个账户")
+            logger.info(f"      社区 {i+1}: {len(comm)} 个账户")
 
         # ---- 5. 识别可疑社区 ----
-        print("  [步骤 5/6] 识别可疑社区...")
+        logger.info("  [步骤 5/6] 识别可疑社区...")
         suspicious_communities = _identify_suspicious_communities(
             G, communities, risk_scores, centrality
         )
         high_risk_comms = [c for c in suspicious_communities if c["community_risk"] >= 0.3]
-        print(f"    → 可疑社区数(风险≥0.3): {len(high_risk_comms)}")
+        logger.info(f"    → 可疑社区数(风险≥0.3): {len(high_risk_comms)}")
 
         # 增强可疑交易证据
         enriched_hits = _enrich_suspicious_with_graph(
@@ -686,7 +690,7 @@ def create_graph_analyst_agent(llm=None):
         )
 
         # ---- 6. GNN 节点分类 ----
-        print("  [步骤 6/6] GNN 可疑账户识别...")
+        logger.info("  [步骤 6/6] GNN 可疑账户识别...")
         gnn_result = None
         gnn_metrics = None
         gnn_model_label = ""
@@ -701,9 +705,9 @@ def create_graph_analyst_agent(llm=None):
                         cleaned, enriched_hits
                     )
                     if gnn_result is not None:
-                        print(f"    → 使用 EdgeAwareGAT (边特征增强)")
+                        logger.info(f"    → 使用 EdgeAwareGAT (边特征增强)")
                 except Exception as e:
-                    print(f"    → EdgeAwareGAT 失败，降级到标准 GNN: {e}")
+                    logger.warning(f"    → EdgeAwareGAT 失败，降级到标准 GNN: {e}")
                     gnn_result = None
 
             # 降级路径: 标准 GCN/GAT (仅拓扑结构)
@@ -714,11 +718,11 @@ def create_graph_analyst_agent(llm=None):
                     model, gnn_metrics = train_gnn(gnn_data, epochs=200, verbose=False)
                     gnn_result = infer_gnn(model, gnn_data)
                     gnn_model_label = "GNN"
-                    print(f"    → 使用标准 GNN (GCN/GAT)")
+                    logger.info(f"    → 使用标准 GNN (GCN/GAT)")
                 except ImportError:
-                    print("    → PyTorch/PyG 未安装，跳过 GNN 分析")
+                    logger.warning("    → PyTorch/PyG 未安装，跳过 GNN 分析")
                 except Exception as e:
-                    print(f"    → GNN 分析失败: {str(e)}")
+                    logger.warning(f"    → GNN 分析失败: {str(e)}")
 
             # 生成告警（EdgeGNN 与标准 GNN 共用逻辑）
             if gnn_result is not None:
@@ -731,7 +735,7 @@ def create_graph_analyst_agent(llm=None):
                     G,
                 )
         else:
-            print(f"    → 节点数({node_count})不足，跳过 GNN 分析")
+            logger.info(f"    → 节点数({node_count})不足，跳过 GNN 分析")
 
         # 图统计
         total_amount = sum(d["total_amount"] for _, _, d in G.edges(data=True))

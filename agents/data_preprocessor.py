@@ -12,6 +12,9 @@ import time
 from datetime import datetime
 from collections import Counter, defaultdict
 from graph.state import AMLState, Transaction
+from utils import get_logger
+
+logger = get_logger("data_preprocessor")
 
 
 def _parse_timestamp(ts_str: str):
@@ -238,7 +241,7 @@ def _try_paysim_enhancement(cleaned: list) -> dict:
             "fraud_ratio": stats.get("fraud_ratio", 0),
         }
     except Exception as e:
-        print(f"  - PaySim 特征增强跳过: {e}")
+        logger.warning(f"PaySim增强跳过: {e}")
         return None
 
 

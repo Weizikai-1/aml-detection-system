@@ -6,6 +6,9 @@ from config.llm import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LLM_
 from config.rules import RULES_CONFIG
 from config.system import GNN_CONFIG, REPORT_CONFIG, CACHE_CONFIG, RISK_CONFIG, DATA_DIR, REPORTS_DIR, LOGS_DIR, CACHE_DIR, HISTORY_DIR, FEEDBACK_DIR, EXPORTS_DIR
 from config.aml_rules import AML_RULES
+from utils import get_logger
+
+logger = get_logger("aml_config")
 
 AML_CONFIG = {
     "llm": {
@@ -102,7 +105,7 @@ def _apply_yaml_rules_override():
         AML_CONFIG["_rule_yaml_manager"] = manager
     except Exception as e:
         # 安全降级: YAML 加载失败时保持 AML_CONFIG 硬编码值（戒律 P1: 不阻塞）
-        print(f"[配置] YAML 规则加载跳过，使用硬编码默认值: {e}")
+        logger.warning(f"YAML加载跳过，使用默认值: {e}")
 
 
 _apply_yaml_rules_override()

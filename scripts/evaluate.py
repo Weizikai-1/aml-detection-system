@@ -80,7 +80,7 @@ def load_data():
         n_f = ((df["type"] == t) & (df["isFraud"] == 1)).sum()
         print(f"    {t}: {n:,} ({n_f} 欺诈)")
 
-    return df, labels
+    return df, labels, dataset
 
 
 # ============================================================
@@ -155,7 +155,7 @@ def random_baseline(labels, n_predicted):
 # ============================================================
 # Phase 3: GNN 评估
 # ============================================================
-def evaluate_gnn(df, labels):
+def evaluate_gnn(df, labels, dataset=None):
     """
     GNN 节点分类评估 — 使用 Ground Truth 标签（isFraud），非规则命中
 
@@ -175,20 +175,28 @@ def evaluate_gnn(df, labels):
 
     if not _GNN_AVAILABLE:
         print(f"  ❌ GNN 不可用: {_GNN_ERROR}")
-        print(f"  需要: pip install torch torch-geometric")
         return None
 
-    print(f"  构建资金流向图...")
+    # 获取账户特征增强节点表示
+    account_features = None
+    if dataset is not None:
+        try:
+            account_features = dataset.get_account_features()
+            print(f"  账户特征: {account_features.shape[1]}维 (×{len(account_features)}个账户)")
+        except Exception:
+            pass
 
-    # 1. 构建图（使用 ground truth 标签）
+    print("  构建资金流向图...")
     builder = AMLGraphBuilder()
-    builder.build_from_transactions(df, use_transaction_nodes=False)
+    builder.build_from_transactions(df, account_features=account_features, use_transaction_nodes=False)
     data = builder.to_pyg_data()
 
     n_nodes = data.x.shape[0]
     n_edges = data.edge_index.shape[1]
     n_fraud_nodes = int(data.y.sum().item())
+    n_feats = data.x.size(1)
     print(f"  节点: {n_nodes} | 边: {n_edges} | 欺诈节点: {n_fraud_nodes} ({n_fraud_nodes/n_nodes*100:.1f}%)")
+    print(f"  节点特征维度: {n_feats}")
 
     # 2. 训练/测试划分 (8:2)
     perm = torch.randperm(n_nodes)
@@ -328,7 +336,7 @@ def print_report(rule_results, baseline, rule_core=None, gnn_results=None):
 
 def main():
     # Phase 1
-    df, labels = load_data()
+    df, labels, dataset = load_data()
     t = convert_to_transactions(df)
 
     # Phase 2: 规则引擎
@@ -336,8 +344,8 @@ def main():
     baseline = random_baseline(labels, rule_results["n_predicted"])
     rule_core = evaluate_rules_core(t, labels)
 
-    # Phase 3: GNN
-    gnn_results = evaluate_gnn(df, labels)
+    # Phase 3: GNN (with account features enhancement)
+    gnn_results = evaluate_gnn(df, labels, dataset)
 
     # 报告
     print_report(rule_results, baseline, rule_core, gnn_results)

@@ -16,6 +16,9 @@ import os
 from typing import List
 from graph.state import AMLState, SuspiciousTransaction
 from config import LLM_CONFIG, RISK_CONFIG
+from utils import get_logger
+
+logger = get_logger("llm_reviewer")
 
 
 SYSTEM_PROMPT = """你是一名拥有10年银行反洗钱团队经验的资深反洗钱(AML)分析师。
@@ -179,6 +182,7 @@ def _parse_llm_response(content: str, s: SuspiciousTransaction) -> dict:
         return result
     except Exception as e:
         # 降级: 基于规则评分做保守判断（不默认判可疑）
+        logger.warning(f"LLM评分降级: {e}")
         orig = s.get("risk_score", 50)
         if orig >= 70:
             degraded_level = "high"
@@ -220,6 +224,7 @@ def _analyze_with_llm(llm, s: SuspiciousTransaction) -> dict:
         return _parse_llm_response(content, s)
     except Exception as e:
         # 降级: 基于规则评分做保守判断（不默认判可疑）
+        logger.error(f"LLM深审调用失败: {e}", exc_info=True)
         orig = s.get("risk_score", 50)
         if orig >= 70:
             degraded_level = "high"
@@ -282,6 +287,7 @@ def _batch_analyze_with_llm(llm, suspicious_list: list) -> list[dict]:
                 response = await llm.ainvoke(messages)
                 return response.content if hasattr(response, "content") else str(response)
             except Exception as e:
+                logger.error(f"LLM深审调用失败: {e}", exc_info=True)
                 print(f"  LLM 异步调用失败: {e}")
                 return ""
 
@@ -293,6 +299,7 @@ def _batch_analyze_with_llm(llm, suspicious_list: list) -> list[dict]:
     try:
         responses = _run_async(_batch())
     except Exception as e:
+        logger.warning(f"LLM评分降级: {e}")
         print(f"  批量LLM调用异常，回退到串行模式: {e}")
         return [_analyze_with_llm(llm, s) for s in suspicious_list]
 

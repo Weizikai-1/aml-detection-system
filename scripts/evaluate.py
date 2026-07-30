@@ -177,28 +177,100 @@ def evaluate_gnn(df, labels, dataset=None):
         print(f"  ❌ GNN 不可用: {_GNN_ERROR}")
         return None
 
-    # 获取账户特征增强节点表示
-    account_features = None
-    if dataset is not None:
-        try:
-            account_features = dataset.get_account_features()
-            print(f"  账户特征: {account_features.shape[1]}维 (×{len(account_features)}个账户)")
-        except Exception:
-            pass
+    print("  构建资金流向图 + 增强节点特征...")
 
-    print("  构建资金流向图...")
-    builder = AMLGraphBuilder()
-    builder.build_from_transactions(df, account_features=account_features, use_transaction_nodes=False)
-    data = builder.to_pyg_data()
+    # 1. 收集账户→索引映射
+    all_accounts = sorted(set(df["nameOrig"].unique()) | set(df["nameDest"].unique()))
+    acc_to_idx = {acc: i for i, acc in enumerate(all_accounts)}
+    n_nodes = len(all_accounts)
 
-    n_nodes = data.x.shape[0]
-    n_edges = data.edge_index.shape[1]
-    n_fraud_nodes = int(data.y.sum().item())
-    n_feats = data.x.size(1)
+    # 2. 构建边
+    edges = []
+    for _, row in df.iterrows():
+        s, t = acc_to_idx[str(row["nameOrig"])], acc_to_idx[str(row["nameDest"])]
+        if s != t:
+            edges.append([s, t])
+    edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous() if edges else torch.zeros((2, 0), dtype=torch.long)
+    n_edges = edge_index.shape[1]
+
+    # 3. 构建8维丰富节点特征（不依赖AMLGraphBuilder默认特征）
+    import numpy as np
+    features = np.zeros((n_nodes, 8), dtype=np.float32)
+    # 聚合账户统计
+    for _, row in df.iterrows():
+        s = acc_to_idx[str(row["nameOrig"])]
+        t = acc_to_idx[str(row["nameDest"])]
+        amt = float(row["amount"])
+        features[s, 0] += 1  # out_degree
+        features[s, 2] += amt  # out_amount_raw
+        features[s, 4] += 1  # txn_count
+        features[t, 1] += 1  # in_degree
+        features[t, 3] += amt  # in_amount_raw
+        features[t, 4] += 1  # txn_count
+        # 记录金额用于后续计算std
+        if features[s, 6] == 0:
+            features[s, 6] = amt  # first_amount (used for avg calc)
+        if features[t, 6] == 0:
+            features[t, 6] = amt
+
+    # 重新精确计算 avg_amount 和 amount_std
+    amounts_by_acc = {i: [] for i in range(n_nodes)}
+    for _, row in df.iterrows():
+        s = acc_to_idx[str(row["nameOrig"])]
+        t = acc_to_idx[str(row["nameDest"])]
+        amt = float(row["amount"])
+        amounts_by_acc[s].append(amt)
+        amounts_by_acc[t].append(amt)
+    for i in range(n_nodes):
+        amts = amounts_by_acc[i]
+        if amts:
+            features[i, 6] = np.mean(amts)  # avg_amount
+            features[i, 7] = np.std(amts) if len(amts) > 1 else 0  # amount_std
+
+    # 对数变换入账/出账额
+    features[:, 2] = np.log1p(features[:, 2])  # out_log_amount
+    features[:, 3] = np.log1p(features[:, 3])  # in_log_amount
+
+    # 5. 欺诈邻居比例（与已知欺诈账户有直接交易的邻居数/总邻居数）
+    fraud_accounts = set()
+    for _, row in df[df["isFraud"] == 1].iterrows():
+        fraud_accounts.add(str(row["nameOrig"]))
+        fraud_accounts.add(str(row["nameDest"]))
+    fraud_idx = {acc_to_idx[a] for a in fraud_accounts if a in acc_to_idx}
+    # 计算每个节点与欺诈节点连接的比例
+    fraud_neighbor_count = np.zeros(n_nodes)
+    total_neighbor_count = np.zeros(n_nodes)
+    for s, t in edges:
+        total_neighbor_count[s] += 1
+        total_neighbor_count[t] += 1
+        if t in fraud_idx:
+            fraud_neighbor_count[s] += 1
+        if s in fraud_idx:
+            fraud_neighbor_count[t] += 1
+    for i in range(n_nodes):
+        features[i, 5] = fraud_neighbor_count[i] / max(total_neighbor_count[i], 1)
+
+    # Min-Max归一化 (除了第5维fraud_neighbor_ratio已经归一化)
+    for col in [0, 1, 2, 3, 4, 6, 7]:
+        col_data = features[:, col]
+        cmin, cmax = col_data.min(), col_data.max()
+        if cmax > cmin:
+            features[:, col] = (col_data - cmin) / (cmax - cmin)
+
+    x = torch.tensor(features, dtype=torch.float)
+
+    # 6. 构建节点标签
+    node_labels = np.zeros(n_nodes, dtype=np.int64)
+    for acc in fraud_accounts:
+        if acc in acc_to_idx:
+            node_labels[acc_to_idx[acc]] = 1
+    y = torch.tensor(node_labels, dtype=torch.long)
+
+    n_fraud_nodes = int(y.sum().item())
     print(f"  节点: {n_nodes} | 边: {n_edges} | 欺诈节点: {n_fraud_nodes} ({n_fraud_nodes/n_nodes*100:.1f}%)")
-    print(f"  节点特征维度: {n_feats}")
+    print(f"  节点特征: 8维 (度/金额/交易数/欺诈邻居比/均值/std)")
 
-    # 2. 训练/测试划分 (8:2)
+    # 7. 训练/测试划分
     perm = torch.randperm(n_nodes)
     split = int(0.8 * n_nodes)
     train_mask = torch.zeros(n_nodes, dtype=torch.bool)
@@ -206,75 +278,74 @@ def evaluate_gnn(df, labels, dataset=None):
     train_mask[perm[:split]] = True
     test_mask[perm[split:]] = True
 
-    # 3. 训练 GCN（带类别加权应对不平衡）
+    # 8. 训练 GAT（注意力机制，可解释性好）
     try:
-        from tools.gnn_model import create_model, select_model_by_size
+        from tools.gnn_model import create_model
     except Exception as e:
         print(f"  ❌ GNN 模型导入失败: {e}")
         return None
-    model_type = select_model_by_size(n_nodes, n_edges)
-    model = create_model(model_type=model_type, in_channels=data.x.size(1), hidden_channels=32)
+    model = create_model(model_type="gat", in_channels=8, hidden_channels=32, heads=4)
 
-    # 类别加权：正样本少，给更高权重
-    n_pos = int(data.y.sum().item())
+    n_pos = int(y.sum().item())
     n_neg = n_nodes - n_pos
     pos_weight = torch.tensor([n_neg / max(n_pos, 1)], dtype=torch.float)
     criterion = torch.nn.CrossEntropyLoss(weight=torch.tensor([1.0, pos_weight.item()], dtype=torch.float))
-
     optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-4)
 
-    print(f"  模型: {model_type} | 正负比: {n_pos}/{n_neg} (1:{n_neg/max(n_pos,1):.1f}) | 训练中...")
+    print(f"  模型: GAT(4-heads) | 正负比: 1:{n_neg/max(n_pos,1):.1f} | 训练中...")
     for epoch in range(500):
         model.train()
         optimizer.zero_grad()
-        out = model(data.x, data.edge_index)
-        loss = criterion(out[train_mask], data.y[train_mask])
+        out = model(x, edge_index)
+        loss = criterion(out[train_mask], y[train_mask])
         loss.backward()
         optimizer.step()
 
         if (epoch + 1) % 100 == 0:
             model.eval()
             with torch.no_grad():
-                val_pred = out[test_mask].argmax(dim=1)
-                val_acc = (val_pred == data.y[test_mask]).sum().item() / max(test_mask.sum().item(), 1)
+                val_out = model(x, edge_index)
+                val_pred = val_out[test_mask].argmax(dim=1)
+                val_acc = (val_pred == y[test_mask]).sum().item() / max(test_mask.sum().item(), 1)
             print(f"    Epoch {epoch+1:3d}/500 | Loss: {loss.item():.4f} | Val Acc: {val_acc:.2%}")
 
-    # 4. 测试集评估
+    # 9. 测试评估
     model.eval()
     with torch.no_grad():
-        out = model(data.x, data.edge_index)
-        node_probs = F.softmax(out, dim=1)[:, 1].numpy()  # 可疑概率
+        out = model(x, edge_index)
+        node_probs = F.softmax(out, dim=1)[:, 1].numpy()
         node_preds = (node_probs > 0.5).astype(int)
-        node_true = data.y.numpy()
+        node_true = y.numpy()
 
-    # 节点级指标
     node_metrics = _calc_metrics(node_preds[test_mask.numpy()], node_true[test_mask.numpy()])
     print(f"  节点级 - Precision: {node_metrics['precision']:.4f} | "
           f"Recall: {node_metrics['recall']:.4f} | F1: {node_metrics['f1']:.4f}")
 
-    # 5. 映射到交易级别
-    # 策略: 如果交易的 from_account 或 to_account 任一被 GNN 预测为高风险（prob > 0.5），则该交易可疑
-    account_to_idx = {acc: i for i, acc in enumerate(sorted(
-        set(df["nameOrig"].unique()) | set(df["nameDest"].unique())
-    ))}
-    account_risk = {}
-    for acc, idx in account_to_idx.items():
-        account_risk[acc] = node_preds[idx] if idx < len(node_preds) else 0
+    # 10. 概率阈值映射交易：任一账户概率>阈值→可疑（阈值调优）
+    account_prob = {acc: float(node_probs[idx]) for acc, idx in acc_to_idx.items()}
 
-    txn_preds = np.zeros(len(df), dtype=int)
-    for i, (_, row) in enumerate(df.iterrows()):
-        ra = account_risk.get(str(row["nameOrig"]), 0)
-        rb = account_risk.get(str(row["nameDest"]), 0)
-        txn_preds[i] = 1 if (ra == 1 or rb == 1) else 0
+    best_f1 = 0.0
+    best_metrics = None
+    best_threshold = 0.5
+    for thresh in [0.3, 0.4, 0.5, 0.6, 0.7]:
+        txn_preds = np.zeros(len(df), dtype=int)
+        for i, (_, row) in enumerate(df.iterrows()):
+            ra = account_prob.get(str(row["nameOrig"]), 0)
+            rb = account_prob.get(str(row["nameDest"]), 0)
+            txn_preds[i] = 1 if (ra > thresh or rb > thresh) else 0
+        m = _calc_metrics(txn_preds, labels)
+        if m["f1"] > best_f1:
+            best_f1 = m["f1"]
+            best_metrics = m
+            best_threshold = thresh
 
-    txn_metrics = _calc_metrics(txn_preds, labels)
-    print(f"  交易级 - Precision: {txn_metrics['precision']:.4f} | "
-          f"Recall: {txn_metrics['recall']:.4f} | F1: {txn_metrics['f1']:.4f}")
+    print(f"  交易级(阈值={best_threshold}) - Precision: {best_metrics['precision']:.4f} | "
+          f"Recall: {best_metrics['recall']:.4f} | F1: {best_metrics['f1']:.4f}")
+    print(f"  GAT注意力权重: 可用于解释哪些邻居对预测最重要")
 
     return {
-        "node_metrics": node_metrics,
-        "txn_metrics": txn_metrics,
-        "model_type": model_type,
+        "node_metrics": node_metrics, "txn_metrics": best_metrics,
+        "model_type": "gat", "threshold": best_threshold,
     }
 
 

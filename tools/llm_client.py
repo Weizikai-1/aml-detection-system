@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 
 from langchain_openai import ChatOpenAI
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LLM_CONFIG
-from config.cache import CACHE_CONFIG
+from config.system import CACHE_CONFIG
 
 logger = logging.getLogger(__name__)
 

@@ -4,12 +4,8 @@
 """
 from config.llm import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, LLM_CONFIG
 from config.rules import RULES_CONFIG
-from config.risk import RISK_CONFIG
-from config.gnn import GNN_CONFIG
-from config.report import REPORT_CONFIG
+from config.system import GNN_CONFIG, REPORT_CONFIG, CACHE_CONFIG, RISK_CONFIG, DATA_DIR, REPORTS_DIR, LOGS_DIR, CACHE_DIR, HISTORY_DIR, FEEDBACK_DIR, EXPORTS_DIR
 from config.aml_rules import AML_RULES
-from config.cache import CACHE_CONFIG
-from config.paths import DATA_DIR, REPORTS_DIR, LOGS_DIR, CACHE_DIR, HISTORY_DIR, FEEDBACK_DIR, EXPORTS_DIR
 
 AML_CONFIG = {
     "llm": {
@@ -114,7 +110,7 @@ _apply_yaml_rules_override()
 
 def check_config():
     from config.llm import DEEPSEEK_API_KEY, DEEPSEEK_MODEL
-    from config.paths import DATA_DIR, REPORTS_DIR
+    from config.system import DATA_DIR, REPORTS_DIR
     if not DEEPSEEK_API_KEY:
         print("错误: 未配置 DEEPSEEK_API_KEY")
         print("请复制 .env.example 为 .env,并填入你的 DeepSeek API Key")

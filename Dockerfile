@@ -1,5 +1,6 @@
-# AML-Agent 反洗钱分析系统 - 生产环境 Docker 镜像
-# 基于 Python 3.10 slim，符合生产环境安全规范
+# AML-Agent 反洗钱分析系统 - Docker 镜像（参考配置）
+# 注意: api/ 模块已删除，此 Dockerfile 需重构为 CLI 模式后方可使用
+# 基于 Python 3.10 slim
 
 # ===== 基础镜像 =====
 FROM python:3.10-slim

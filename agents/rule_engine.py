@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Dict, List, Tuple
 from graph.state import AMLState, SuspiciousTransaction, Transaction
-from config import AML_CONFIG, PROFILES_DIR, CACHE_CONFIG
+from config import AML_CONFIG
 
 
 def _parse_ts(ts_str: str):
@@ -1535,58 +1535,6 @@ def create_rule_engine_agent(llm=None):
                 "current_step": "rule_engine",
             }
 
-        # 加载账户风险画像（戒律 P1: 累犯加权；P2: 清白降分）
-        profile_manager = None
-        try:
-            import os
-            from tools.account_profile import AccountProfileManager
-            profile_path = os.path.join(PROFILES_DIR, "account_profiles.json")
-            profile_manager = AccountProfileManager(profile_path)
-            if profile_manager.get_all_profiles():
-                print(f"  已加载账户画像: {len(profile_manager.get_all_profiles())} 个账户")
-        except Exception as e:
-            print(f"  画像加载跳过: {e}")
-            profile_manager = None
-
-        # ===== 结果缓存检查 =====
-        # 戒律 P2: 启用画像加权时跳过缓存，因为画像变化会影响结果
-        cache = None
-        cache_key = None
-        cache_eligible = (
-            CACHE_CONFIG.get("enabled", False)
-            and not (CACHE_CONFIG.get("skip_when_profile", True) and profile_manager is not None and profile_manager.get_all_profiles())
-        )
-        if cache_eligible:
-            try:
-                from tools.analysis_cache import AnalysisCache, build_config_snapshot
-                cache = AnalysisCache(
-                    cache_dir=None,
-                    enabled=True,
-                    expire_days=CACHE_CONFIG.get("expire_days", 7),
-                    max_size_mb=CACHE_CONFIG.get("max_size_mb", 100),
-                )
-                config_snapshot = build_config_snapshot(AML_CONFIG)
-                cache_key = cache._compute_key(cleaned, config_snapshot)
-                cached_result = cache.get(cache_key)
-                if cached_result is not None:
-                    # 缓存命中：直接返回（戒律 P1: 不遗漏）
-                    elapsed = time.time() - start_time
-                    print(f"  ✅ 缓存命中，跳过规则计算 (key={cache_key})")
-                    print(f"  耗时: {elapsed:.3f} 秒（缓存）")
-                    print("[Agent 2] 规则引擎检测完成（缓存）")
-                    cached_result["current_step"] = "rule_engine"
-                    cached_result["step_times"] = {"rule_engine": elapsed}
-                    cached_result["rule_engine_stats"] = dict(cached_result.get("rule_engine_stats", {}))
-                    cached_result["rule_engine_stats"]["cache_hit"] = True
-                    # 移除内部标记，不污染state
-                    cached_result.pop("_cache_hit", None)
-                    return cached_result
-            except Exception as e:
-                print(f"  缓存读取跳过: {e}")
-                cache = None
-
-        print("  缓存未命中，执行规则计算..." if cache_eligible else "  缓存未启用，执行规则计算...")
-
         # 执行10条规则
         print("  [规则 1/10] 分拆转账检测...")
         smurfing_results = _detect_smurfing(cleaned)
@@ -1667,8 +1615,8 @@ def create_rule_engine_agent(llm=None):
             1 for s in all_hits if any("备注降分" in e for e in s.get("evidence", []))
         )
 
-        # 账户画像加权（戒律 P1: 累犯加成；P2: 清白降分）
-        all_hits, profile_adjusted_count = _apply_profile_weighting(all_hits, profile_manager)
+        # 账户画像加权：已移除（无真实画像数据，避免编造）
+        profile_adjusted_count = 0
 
         # 各规则详情计数
         rule_details = {
@@ -1698,17 +1646,6 @@ def create_rule_engine_agent(llm=None):
         print(f"  耗时: {elapsed:.2f} 秒")
         print("[Agent 2] 规则引擎检测完成")
 
-        # 更新账户画像并保存（为下次分析积累数据）
-        if profile_manager is not None:
-            try:
-                # 戒律 M1: 累加真实交易笔数（影响 P2 清白账户降分判定）
-                profile_manager.update_from_transactions(cleaned)
-                profile_manager.update_from_suspicious(all_hits, len(cleaned))
-                profile_manager.save()
-                print(f"  账户画像已更新并保存")
-            except Exception as e:
-                print(f"  画像保存失败: {e}")
-
         result = {
             "rule_hits": all_hits,
             "rule_hit_count": len(all_hits),
@@ -1724,14 +1661,6 @@ def create_rule_engine_agent(llm=None):
             "current_step": "rule_engine",
             "step_times": {"rule_engine": elapsed},
         }
-
-        # 写入缓存（戒律 M1: 缓存真实计算结果）
-        if cache is not None and cache_key is not None:
-            try:
-                cache.set(cache_key, result)
-                print(f"  缓存已写入 (key={cache_key})")
-            except Exception as e:
-                print(f"  缓存写入跳过: {e}")
 
         return result
 

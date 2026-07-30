@@ -38,19 +38,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# 测试文件允许一些灵活性
-"tests/**/*.py" = ["B011", "F841"]
 # __init__.py 允许未使用导入（re-export）
 "__init__.py" = ["F401", "F403"]
-# API 路由允许 B008（FastAPI Depends）
-"api/**/*.py" = ["B008"]
 # 主入口允许 E402
 "main.py" = ["E402"]
-"app.py" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["agents", "api", "config", "graph", "tools"]
-force-single-line = false
+known-first-party = ["agents", "config", "graph", "tools"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -376,18 +376,6 @@ def create_data_preprocessor_agent(llm=None):
         print(f"  - 缺失值填充: {missing_filled} 条")
         print(f"  - 清洗后交易数: {len(cleaned)}")
 
-        # ---- 2.5 地理风险评分（B1-2: 地理风险因子评分） ----
-        # 戒律 M1: 基于交易真实地理字段计算，不臆测
-        # 戒律 M3: 评分范围 0-100
-        try:
-            from tools.geo_risk_scorer import geo_risk_scorer
-            geo_risk_scorer.score_transactions(cleaned)
-            geo_scored_count = sum(1 for t in cleaned if t.get("geo_risk_score", 0) > 0)
-            if geo_scored_count > 0:
-                print(f"  - 地理风险评分: {geo_scored_count} 笔交易命中地理风险")
-        except Exception as e:
-            # 戒律: 异常隔离，不阻塞预处理
-            print(f"  - 地理风险评分跳过: {e}")
 
         # ---- 3. 全局统计特征 ----
         # 戒律 M1: amount 可能为 None，统计时过滤掉

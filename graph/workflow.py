@@ -49,8 +49,6 @@ class AMLAgentsGraph:
         llm: Any = None,
         config: Dict[str, Any] = None,
         use_checkpoint: bool = False,
-        auto_evaluate: bool = False,
-        enable_monitor: bool = True,
     ):
         """
         初始化反洗钱多Agent系统
@@ -63,18 +61,6 @@ class AMLAgentsGraph:
         self.config = config or AML_CONFIG
         self.llm = llm
         self.use_checkpoint = use_checkpoint
-        self.auto_evaluate = auto_evaluate
-        self.enable_monitor = enable_monitor
-
-        # 初始化监控器（失败不阻塞主流程）
-        self.monitor = None
-        if enable_monitor:
-            try:
-                from tools.monitor import Monitor
-                self.monitor = Monitor()
-            except Exception as e:
-                print(f"  [监控] 初始化失败，禁用: {e}")
-                self.enable_monitor = False
 
         # 初始化组件
         self.conditional_logic = ConditionalLogic(
@@ -166,122 +152,10 @@ class AMLAgentsGraph:
         # 计算价值证明指标
         total_time = time.time() - start_time
         final_state["total_processing_time"] = round(total_time, 3)
-
-        # 计算价值证明指标
         final_state["value_metrics"] = self._calculate_value_metrics(final_state)
-
-        # 端到端不变量检查（戒律保障，失败不影响主流程）
-        try:
-            from tools.invariant_checker import check_invariants
-            invariant_result = check_invariants(final_state)
-            final_state["invariant_check"] = invariant_result
-            if not invariant_result["passed"]:
-                print(f"\n  ⚠️ 不变量检查: 发现 {invariant_result['violation_count']} 个违反")
-                for v in invariant_result["violations"]:
-                    print(f"    [{v['severity']}] {v['invariant']}: {v['detail']}")
-            else:
-                print(f"\n  ✅ 不变量检查: 全部通过")
-        except Exception as e:
-            print(f"  不变量检查跳过: {e}")
-
-        # 自动评估（可选，失败不影响主流程）
-        if self.auto_evaluate:
-            try:
-                eval_result = self._run_auto_evaluation(final_state)
-                if eval_result:
-                    final_state["evaluation"] = eval_result
-            except Exception as e:
-                print(f"  自动评估跳过: {e}")
-
-        # 监控告警检查（可选，失败不影响主流程）
-        if self.enable_monitor and self.monitor is not None:
-            try:
-                alerts = self.monitor.check_workflow_state(final_state)
-                final_state["triggered_alerts"] = [
-                    {"rule_id": a.rule_id, "severity": a.severity, "message": a.message}
-                    for a in alerts
-                ]
-                if alerts:
-                    print(f"  监控告警: 共触发 {len(alerts)} 条告警")
-            except Exception as e:
-                print(f"  监控告警跳过: {e}")
 
         # 打印最终摘要
         self._print_summary(final_state)
-
-        # 跨期案件串联分析（B1-3: 关联历史案件，提升风险识别）
-        # 戒律 M1: 基于真实历史数据，不臆测
-        # 戒律 P1: 关联历史案件可显著提升风险分
-        # 戒律 P2: 仅时间临近但无实质关联不串联
-        try:
-            from tools.cross_period_linker import cross_period_linker
-            from tools.history_manager import HistoryManager
-            hm = HistoryManager()
-            history_records = hm.list_runs(limit=50)
-            if history_records:
-                # 加载完整历史记录（list_runs 只返回摘要）
-                full_history = []
-                for h in history_records:
-                    full = hm.get_run(h.get("execution_id", ""))
-                    if full:
-                        full_history.append(full)
-
-                links = cross_period_linker.link_current_to_history(final_state, full_history)
-                if links:
-                    print(f"  跨期串联: 发现 {len(links)} 条关联历史案件")
-                    # 应用到 STR 报告
-                    reports = final_state.get("final_reports", []) or final_state.get("str_reports", [])
-                    if reports:
-                        updated_reports = cross_period_linker.apply_links_to_reports(reports, links)
-                        if "final_reports" in final_state:
-                            final_state["final_reports"] = updated_reports
-                        if "str_reports" in final_state:
-                            final_state["str_reports"] = updated_reports
-                    final_state["cross_period_links"] = links
-        except Exception as e:
-            print(f"  跨期串联分析跳过: {e}")
-
-        # 保存历史记录（戒律 M4: 完整记录便于追溯；失败不影响主流程）
-        try:
-            from tools.history_manager import HistoryManager
-            hm = HistoryManager()
-            hm.save_run(final_state)
-            print(f"  历史记录已保存 (execution_id={self.execution_id})")
-        except Exception as e:
-            print(f"  历史记录保存跳过: {e}")
-
-        # 数据血缘追踪（B2-3: 端到端可追溯；戒律 M1/M4/P4）
-        # 记录"报告→证据→规则→原始交易→导入批次"完整链路
-        try:
-            from tools.data_lineage_tracker import get_lineage_tracker
-            tracker = get_lineage_tracker()
-            if tracker is not None:
-                lineage_id = tracker.record_lineage(self.execution_id, final_state)
-                if lineage_id:
-                    final_state["lineage_id"] = lineage_id
-                    print(f"  数据血缘已记录 (lineage_id={lineage_id})")
-        except Exception as e:
-            print(f"  数据血缘追踪跳过: {e}")
-
-        # 生成交互式资金流向可视化（戒律 M4: 可视化便于分析师追溯；失败不影响主流程）
-        try:
-            from tools.flow_visualizer import FlowVisualizer
-            viz = FlowVisualizer()
-            viz_path = viz.generate_from_state(final_state)
-            print(f"  资金流向可视化已生成: {viz_path}")
-        except Exception as e:
-            print(f"  资金流向可视化跳过: {e}")
-
-        # 生成交互式关联图谱（B3-1: 三视图切换；戒律 M1/M4/P4）
-        try:
-            from tools.interactive_graph_builder import InteractiveGraphBuilder
-            ig = InteractiveGraphBuilder()
-            ig_path = ig.export_html(final_state)
-            if ig_path:
-                final_state["interactive_graph_path"] = ig_path
-                print(f"  交互式关联图谱已生成: {ig_path}")
-        except Exception as e:
-            print(f"  交互式关联图谱跳过: {e}")
 
         return final_state
 
@@ -500,35 +374,4 @@ class AMLAgentsGraph:
 
         print("\n" + "=" * 70)
 
-    def _run_auto_evaluation(self, state: Dict[str, Any]) -> Optional[dict]:
-        """
-        自动评估：用最新真值集评估当前分析结果
 
-        Returns:
-            评估结果字典，或None（无真值集时）
-        """
-        from tools.ground_truth_builder import load_latest_ground_truth
-        from tools.evaluator import evaluate_workflow_state, format_evaluation_report
-
-        ground_truth = load_latest_ground_truth()
-        if ground_truth is None:
-            print("  [自动评估] 未找到真值集，跳过")
-            return None
-
-        print(f"\n  [自动评估] 使用真值集: {ground_truth.name}")
-        eval_result = evaluate_workflow_state(
-            ground_truth=ground_truth,
-            state=state,
-            scan_thresholds=[30, 40, 50, 60, 70, 80],
-        )
-
-        # 保存评估结果
-        from tools.evaluator import save_evaluation
-        save_evaluation(eval_result, name=f"auto_{eval_result.eval_id}")
-
-        # 打印关键指标
-        o = eval_result.overall
-        print(f"    Precision: {o.precision}  Recall: {o.recall}  F1: {o.f1_score}")
-        print(f"    混淆矩阵: TP={o.tp} FP={o.fp} TN={o.tn} FN={o.fn}")
-
-        return eval_result.to_dict()

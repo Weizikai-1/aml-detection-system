@@ -103,5 +103,3 @@ RULE_AUTO_LEARN_CONFIG = {
     "algorithm_version": "1.0.0",
 }
 
-from tools.geo_risk_scorer import GEO_RISK_CONFIG as _GEO_RISK_CONFIG
-GEO_RISK_CONFIG = _GEO_RISK_CONFIG

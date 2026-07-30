@@ -25,13 +25,16 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
-# PyG 依赖
+# PyG 依赖（戒律 M1: 不编造，不可用时明确标记）
 try:
     import torch
     from torch_geometric.data import Data, HeteroData
     _PYG_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     _PYG_AVAILABLE = False
+    torch = None  # type: ignore
+    Data = None   # type: ignore
+    HeteroData = None  # type: ignore
 
 
 # ============================================================

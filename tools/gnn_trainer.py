@@ -14,8 +14,16 @@ GNN 训练器 — 资金图谱节点分类
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv
+
+# PyG 条件导入（戒律 M1: 不编造，PyG 不可用时明确标记）
+try:
+    from torch_geometric.data import Data
+    from torch_geometric.nn import GCNConv
+    _PYG_AVAILABLE = True
+except ImportError:
+    _PYG_AVAILABLE = False
+    Data = None
+    GCNConv = None
 
 from .gnn_model import create_model, select_model_by_size, is_pyg_available
 

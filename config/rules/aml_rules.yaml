@@ -87,6 +87,11 @@ sanction_list:
   custom_risk_score: 95
   country_risk_score: 90
   crypto_risk_score: 95
+  watchlist:
+  - SDN001
+  - SDN002
+  - OFAC_BLOCKED
+  - PBOC_WATCH
 cross_border:
   enabled: true
   min_amount: 50000
@@ -97,6 +102,12 @@ cross_border:
   risk_score: 65
   high_risk_score: 80
   high_risk_regions:
+  - KP
+  - IR
+  - SY
+  - CU
+  - VE
+  - MM
   - AE
   - SG
   - HK
@@ -107,6 +118,7 @@ cross_border:
   - BVI
 crypto_pattern:
   enabled: true
+  risk_score: 95
   otc_hub_min_in: 3
   otc_hub_min_out: 3
   otc_window_hours: 24
@@ -116,6 +128,15 @@ crypto_pattern:
   mixer_min_out_amount: 50000
   mixer_window_minutes: 30
   mixer_risk_score: 85
+  generic_keywords:
+  - BTC
+  - USDT
+  - ETH
+  - 加密货币
+  - 数字资产
+  - OTC
+  - 币安
+  - 混币
   fx_keywords:
   - 换u
   - 收u
@@ -151,3 +172,85 @@ crypto_pattern:
   - 抹茶
   - 芝麻开门
   platform_risk_score: 75
+
+# ---- 规则 11: 循环转账 ----
+circular_flow:
+  enabled: true
+  max_depth: 4
+  max_days: 3
+  min_amount: 5000
+  risk_score: 80
+
+# ---- 规则 12: 整数金额 ----
+round_amount:
+  enabled: true
+  min_amount: 50000
+  min_txns: 3
+  risk_score: 45
+
+# ---- 规则 13: 高频交易 ----
+high_frequency:
+  enabled: true
+  window_minutes: 60
+  min_txns: 8
+  min_total_amount: 100000
+  risk_score: 60
+
+# ---- 规则 14: 余额清空 ----
+balance_drain:
+  enabled: true
+  min_amount: 10000
+  drain_ratio: 0.9
+  risk_score: 65
+
+# ---- 规则 15: 交易类型跳跃 ----
+type_jump:
+  enabled: true
+  high_risk_types:
+    - CASH_OUT
+    - TRANSFER
+  max_minutes: 30
+  min_amount: 50000
+  risk_score: 55
+
+# ---- 规则 16: 夜间异常 ----
+night_activity:
+  enabled: true
+  night_start: 22
+  night_end: 6
+  min_txns: 5
+  min_amount: 50000
+  risk_score: 50
+
+# ---- 规则 17: 中介账户 ----
+intermediary:
+  enabled: true
+  window_hours: 24
+  min_flows: 3
+  min_amount: 10000
+  min_counterparties: 5
+  risk_score: 70
+
+# ---- 规则 18: 金额聚类 ----
+amount_clustering:
+  enabled: true
+  tolerance: 0.02
+  min_cluster_size: 5
+  risk_score: 55
+
+# ---- 规则 19: 交易量突变 ----
+volume_spike:
+  enabled: true
+  spike_factor: 3.0
+  window_hours: 24
+  min_baseline_txns: 10
+  min_spike_txns: 5
+  risk_score: 60
+
+# ---- 规则 20: 账户异常结构 ----
+structuring:
+  enabled: true
+  threshold: 50000
+  max_daily: 200000
+  min_txns: 3
+  risk_score: 75

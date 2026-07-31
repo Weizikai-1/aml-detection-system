@@ -1,193 +1,98 @@
 """
-LangGraph State 定义 - 反洗钱多Agent系统共享状态
+LangGraph State — 多 Agent 共享状态定义
+参照 TradingAgents 标准设计，遵循 LangGraph 最佳实践
 
 设计原则:
-- 类型安全: 使用 TypedDict 明确定义所有字段类型
-- 易于扩展: 模块化设计，新增Agent只需添加对应字段
-- 最小化冗余: 各Agent产出独立存储，不重复保存原始数据
-- 清晰明确: 按阶段分组，字段语义清晰
-- 完整覆盖: 包含从原始输入到最终报告的全链路数据
+  1. messages 总线 —— 所有 Agent 产出的标准化载体，Annotated + add reducer
+  2. 类型化容器 —— 每个 Agent 的产出收敛到单个结构化字段
+  3. 并行安全 —— 仅控制字段使用 Annotated reducer，数据字段由单一 Agent 写入
+  4. 最小化冗余 —— 不在节点间重复复制 State 中已有的字段
+
+State 生命周期:
+  ┌─ 输入层 (main.py 初始化) ──────────────────────┐
+  │  n_samples, demo_mode                           │
+  └─────────────────────────────────────────────────┘
+         │
+  ┌─ Agent 产出层 (各 Agent 增量写入) ───────────────┐
+  │  data_preprocess  → transactions, data_summary   │
+  │  rule_engine      → rule_report                 │
+  │  graph_analyst    → gnn_report, gnn_enabled     │
+  │  llm_reviewer     → llm_reviews, llm_enabled    │
+  │  report_generator → str_report                  │
+  │  compliance       → compliance                  │
+  └─────────────────────────────────────────────────┘
+         │
+  ┌─ 通信控制层 (并行安全: Annotated + reducer) ─────┐
+  │  messages     → AgentMessage 总线 (add reducer)  │
+  │  current_step → 流程追踪 (last-write-wins)       │
+  │  errors       → 错误收集 (add reducer)           │
+  └─────────────────────────────────────────────────┘
 """
-from typing import TypedDict, Annotated, List, Dict, Any, Optional, Literal
-from langgraph.graph.message import add_messages
+from typing import TypedDict, List, Annotated, Optional, Any
+from operator import add
 
 
-# ============================================================
-# 基础数据结构
-# ============================================================
+# ============================ 类型别名（提升可读性） ============================
 
-class Transaction(TypedDict, total=False):
-    """
-    单笔交易数据结构
-    覆盖原始输入 + 清洗后扩展字段
-    """
-    # 核心字段
-    transaction_id: str          # 交易唯一ID
-    from_account: str            # 付款账户
-    to_account: str              # 收款账户
-    amount: float                # 交易金额
-    timestamp: str               # 交易时间(ISO格式)
-    transaction_type: str        # 交易类型(transfer/payment/cash_out等)
-    remark: str                  # 交易备注
-
-    # 扩展字段(数据预处理后填充)
-    amount_level: str            # 金额等级(low/medium/high/very_high)
-    is_weekend: bool             # 是否周末交易
-    is_night: bool               # 是否夜间交易(22:00-06:00)
-    from_account_risk: str       # 付款方风险等级
-    to_account_risk: str         # 收款方风险等级
-
-    # 风险标记
-    is_suspicious: Optional[bool]        # 是否可疑
-    suspicious_reason: Optional[str]     # 可疑原因
-    risk_score: Optional[float]          # 风险评分(0-100，0=完全正常，100=确定可疑)
+Transaction = dict            # 单条交易记录
+Hits = List[dict]             # 规则命中列表
+ReviewResults = List[dict]    # LLM 审核结果列表
 
 
-class SuspiciousTransaction(TypedDict, total=False):
-    """
-    可疑交易(规则引擎/图分析/LLM深审的产出)
-    包含证据链、命中规则、风险评分
-    """
-    transaction: Transaction           # 关联的原始交易
-    rule_hits: List[str]               # 命中的规则列表
-    risk_score: float                  # 综合风险评分(0-100，0=完全正常，100=确定可疑)
-    evidence: List[str]                # 证据链(文本描述)
-    graph_evidence: Optional[str]      # 图分析补充证据
-    llm_analysis: Optional[str]        # LLM分析结论
-    llm_confidence: Optional[float]    # LLM置信度
-    is_false_positive: Optional[bool]  # 是否误报(LLM判定)
-    community_id: Optional[str]        # 所属团伙ID
+# ============================ Reducer 函数 ============================
+
+def _last_write(_current: Any, new: Any) -> Any:
+    """并行节点写同一标量字段时，取最后写入的值（默认行为）"""
+    return new
 
 
-class STRReport(TypedDict, total=False):
-    """
-    可疑交易报告 (Suspicious Transaction Report)
-    符合央行反洗钱报告格式
-    """
-    report_id: str                     # 报告编号
-    report_date: str                   # 报告生成日期
-    report_type: str                   # 报告类型(初始/补充/复核)
-
-    # 主体信息
-    primary_account: str               # 主涉案账户
-    related_accounts: List[str]        # 关联账户列表
-    customer_profile: Dict[str, Any]   # 客户画像信息
-
-    # 可疑信息
-    suspicious_transactions: List[SuspiciousTransaction]  # 可疑交易列表
-    total_suspicious_amount: float     # 可疑交易总金额
-    suspicious_patterns: List[str]     # 可疑模式描述
-    risk_level: str                    # 整体风险等级(low/medium/high/critical)
-
-    # 分析结论
-    analysis_summary: str              # 分析摘要
-    evidence_chain: List[str]          # 完整证据链
-    disposal_suggestion: str           # 处置建议
-
-    # 审核信息
-    compliance_status: str             # 合规状态(pending/passed/rejected)
-    compliance_notes: Optional[str]    # 合规备注
-    reviewer: Optional[str]            # 审核人
-    final_decision: Optional[str]      # 最终结论
-
-
-class GraphData(TypedDict, total=False):
-    """
-    图分析数据
-
-    节点属性(in nodes[i]):
-        account_id, in_degree, out_degree, in_amount, out_amount, total_txns
-        risk_score, pagerank, betweenness, degree_centrality
-
-    边属性(in edges[i]):
-        from, to, total_amount, txn_count, txn_ids
-    """
-    nodes: List[Dict[str, Any]]
-    edges: List[Dict[str, Any]]
-    node_count: int
-    edge_count: int
-    communities: List[List[str]]
-    suspicious_communities: List[Dict[str, Any]]
-    node_risk_scores: Dict[str, float]
-    graph_stats: Dict[str, Any]
-    centrality: Dict[str, Dict[str, float]]
-    gnn_result: Optional[Dict[str, Any]]
-
-
-# ============================================================
-# 主状态: AMLState
-# ============================================================
+# ============================ State 定义 ============================
 
 class AMLState(TypedDict, total=False):
     """
-    反洗钱多Agent系统共享状态
+    反洗钱多智能体系统全局状态
 
-    数据流向: 输入 → 预处理 → 规则引擎 → 图分析 → LLM深审 → 报告生成 → 合规审核
-    每个Agent只读取自己需要的字段，写入自己负责的字段
+    约定:
+      - 所有字段 total=False（可选），工作流渐进填充
+      - 字段命名: snake_case，Agent 产出统一用 *_report / *_reviews 后缀
+      - 每个 Agent 只写自己名下的字段（单一写入者原则）
+      - 多 Agent 并发写的字段必须标注 Annotated reducer
     """
 
-    # ===== 输入层 =====
-    transactions: List[Transaction]        # 原始交易流水
-    analysis_date: str                     # 分析日期
-    analysis_params: Dict[str, Any]        # 分析参数(自定义阈值等)
+    # ── 输入配置（外部传入，工作流初始化时设置） ──
+    n_samples: int                    # 分析数据量
+    demo_mode: bool                   # 是否注入高风险 Demo 样本
 
-    # ===== Agent 1: 数据预处理 =====
-    cleaned_transactions: List[Transaction]   # 清洗后的交易
-    transaction_features: Dict[str, Any]      # 全局统计特征
-    preprocessing_stats: Dict[str, Any]       # 预处理统计(去重数、缺失值数、quality_score等)
-    account_baselines: Dict[str, Dict[str, Any]]  # 账户行为基线
-    paysim_features: Optional[Dict[str, Any]]  # PaySim 数据集特征(存在则启用 EdgeGNN)
+    # ── 数据层（data_preprocess Agent 独占写入） ──
+    transactions: List[Transaction]   # 交易数据载荷
+    data_summary: dict                # 统计概览 {total, fraud, fraud_rate, types}
+    data_source: str                  # 数据来源标注
+    preprocess_ok: bool               # 预处理是否成功
 
-    # ===== Agent 2: 规则引擎 =====
-    rule_hits: List[SuspiciousTransaction]    # 规则命中的可疑交易
-    rule_hit_count: int                       # 命中交易数
-    rule_details: Dict[str, int]              # 各规则命中数
-    rule_engine_stats: Dict[str, Any]         # 规则引擎统计
+    # ── 规则检测产出（rule_engine Agent 独占写入） ──
+    rule_report: dict                 # {hits, summary, high_risk} 三合一容器
 
-    # ===== Agent 3: 图分析 =====
-    graph_data: GraphData                     # 图数据与分析结果
-    graph_suspicious: List[SuspiciousTransaction]   # 图分析新增可疑
-    graph_hit_count: int                      # 图分析命中数
+    # ── 图分析产出（graph_analyst Agent 独占写入） ──
+    gnn_report: dict                  # {node_f1, node_precision, node_recall}
+    gnn_enabled: bool                 # GNN 是否可用
 
-    # ===== Agent 4: LLM 深审 =====
-    llm_reviewed: List[SuspiciousTransaction]     # LLM 审核后的可疑
-    llm_confirmed: List[SuspiciousTransaction]    # LLM 确认可疑
-    false_positives: List[SuspiciousTransaction]  # LLM 判定误报
-    llm_analysis_count: int                       # LLM 分析数量
-    llm_stats: Dict[str, Any]                     # LLM 统计
+    # ── LLM 深审产出（llm_reviewer Agent 独占写入） ──
+    llm_reviews: ReviewResults        # LLM 审核结果列表
+    llm_enabled: bool                 # LLM 是否可用
 
-    # ===== Agent 4.5: LLM 语义裁决 =====
-    semantic_results: List[Dict[str, Any]]         # 语义异常检测结果
-    adjudications: List[Dict[str, Any]]            # 混合裁决结果(规则+GNN+语义)
-    risk_report: str                               # LLM 生成的自然语言风险报告
+    # ── 报告 + 合规产出（report_generator + compliance 独占写入） ──
+    str_report: str                   # 最终 STR 报告文本
+    compliance: dict                  # 合规审核结果 {passed, issues, status}
 
-    # ===== Agent 5: 报告生成 =====
-    str_reports: List[STRReport]             # 生成的 STR 报告
-    report_count: int                        # 报告数量
-    report_generation_stats: Dict[str, Any]  # 报告生成统计
+    # ── 通信控制层（并行安全: Annotated + 明确 reducer） ──
+    messages: Annotated[List[dict], add]
+    """Agent 间通信总线。每个 Agent 完成后追加一条结构化消息:
+       {"agent": "rule_engine", "timestamp": "2024-...", "summary": "...", "status": "ok"}
+       使用 operator.add 确保并行节点的消息全部保留，不会互相覆盖。
+    """
 
-    # ===== Agent 6: 合规审核 =====
-    final_reports: List[STRReport]           # 合规通过的最终报告
-    rejected_reports: List[STRReport]        # 被驳回的报告
-    human_review_tasks: List[Dict[str, Any]]  # 需人工审核的任务
-    compliance_stats: Dict[str, Any]         # 合规统计
-    compliance_summary: str                  # 合规审核摘要
+    current_step: Annotated[str, _last_write]
+    """当前执行阶段名。并行节点取最后写入值，仅用于 UI 展示和日志。"""
 
-    # ===== 控制层 =====
-    messages: Annotated[list, add_messages]  # 消息历史(Agent间通信)
-    current_step: str                         # 当前步骤
-    error: str                                # 错误信息(如有)
-    total_processing_time: float              # 总处理时间(秒)
-    step_times: Dict[str, float]              # 各步骤耗时
-    execution_id: str                         # 执行ID(用于追踪)
-
-    # ===== 运行时附加字段（由 workflow.py 写入）=====
-    interrupted: bool                         # 是否被用户中断
-    value_metrics: Dict[str, Any]             # 价值证明指标
-    evaluation: Dict[str, Any]                # 自动评估结果
-    triggered_alerts: List[Dict[str, Any]]    # 触发的监控告警
-    compliance_score: float                   # 合规评分
-
-    # ===== 节点元数据（由 graph_setup.py 写入）=====
-    _node_meta: Dict[str, Any]                # 当前节点元数据(node/status/timestamp)
-    _node_error: Dict[str, Any]               # 当前节点错误信息(降级时填充)
+    errors: Annotated[List[str], add]
+    """错误收集列表。并行节点的错误通过 add reducer 拼接，防止丢失。"""

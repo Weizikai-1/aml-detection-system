@@ -38,7 +38,6 @@ GNN = {
 # ---- 风险评分 ----
 RISK = {
     "levels": {"critical": 85, "high": 70, "medium": 50, "low": 0},
-    "threshold": 60,         # 低于此分不报
 }
 
 # ---- LLM (可选) ----

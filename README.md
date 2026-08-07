@@ -1,8 +1,31 @@
 # AML 反洗钱多智能体检测系统
 
-基于 **LangGraph** 构建的 6-Agent 并行协同反洗钱检测引擎，集成 **GNN 图神经网络**与 **DeepSeek LLM** 语义分析，覆盖 20 条检测规则，输出 STR 可疑交易报告。
+<div align="center">
+
+[![CI](https://github.com/Weizikai-1/aml-detection-system/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Weizikai-1/aml-detection-system/actions)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![LangGraph](https://img.shields.io/badge/LangGraph-6_Agents-orange)](https://langchain-ai.github.io/langgraph/)
+[![Tests](https://img.shields.io/badge/Tests-110%2B-brightgreen)](tests/)
+[![Coverage](https://img.shields.io/badge/Coverage-87%25_(core)-yellowgreen)](.coveragerc)
+
+**基于 LangGraph 的 6-Agent 并行协同反洗钱检测引擎**  
+集成 GNN 图神经网络 + DeepSeek LLM 语义分析  
+20 条 YAML 驱动检测规则 → 央行格式 STR 可疑交易报告
+
+</div>
 
 > 数据来源: [Kaggle PaySim](https://www.kaggle.com/datasets/ntnu-testimon/paysim1) 636 万笔真实交易记录
+
+---
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/dashboard.svg" alt="AML Dashboard" width="100%">
+</p>
+
+> 运行 `streamlit run app.py` → http://localhost:8501 查看实时交互仪表盘
 
 ---
 
@@ -66,13 +89,18 @@ echo "DEEPSEEK_API_KEY=sk-xxx" > .env
 # 3. 运行检测
 python main.py                        # 基础模式: 5000 条
 python main.py --demo --n 500         # Demo 模式: 注入高风险样本
-python main.py --demo --n 200         # 快速 Demo
 
 # 4. 可视化界面
-streamlit run app.py
+streamlit run app.py                  # → http://localhost:8501
 
 # 5. API 服务
-uvicorn api:app --port 8000
+uvicorn api:app --port 8000           # → http://localhost:8000/docs
+
+# 6. 运行评估
+python evaluate.py                    # 四重对比: 随机基线 vs 规则 vs GNN
+
+# 7. 运行测试
+python -m pytest tests/ -v            # 110+ 测试用例
 ```
 
 ---
@@ -138,6 +166,21 @@ $ python main.py --demo --n 200
 
 ---
 
+## 性能数据
+
+| 操作 | 数据量 | 延迟 |
+|------|:---:|:---:|
+| 数据加载 | 5000 条 | **0.15s** |
+| 20 条规则检测 | 5000 条 | **0.09s** |
+| GNN 图构建 | 5000 条 | **0.46s** |
+| GNN 训练 (GAT 100 epochs) | ~3500 节点 | **10.5s** |
+| 全链路 Demo (规则+GNN+合规) | 200 条 | **21.6s** |
+| 全链路标准 (规则+GNN+合规) | 5000 条 | **16.4s** |
+
+> 测试环境: Windows 11, Python 3.13, CPU i7-12700H, 无 GPU。GNN 训练是主要耗时瓶颈，推理单次 < 0.1s。
+
+---
+
 ## LLM 深审示例
 
 > **制裁名单命中** (风险分 95) → 嫌疑等级: **high** → 恐怖融资
@@ -152,8 +195,10 @@ $ python main.py --demo --n 200
 
 - **并行安全**: `Annotated[List, add]` reducer 确保并行节点状态不丢失
 - **LLM 容错**: 指数退避重试 (1.5s→3s→6s) + 30s 超时 + 速率限制 + Fallback 降级
+- **标准 PyTorch**: FraudGNN 继承 `nn.Module`，支持 `model.to(device)` / `torch.save()` 等标准 API
 - **延迟导入**: GNN 依赖在函数入口处延迟导入，无安装不阻塞模块加载
 - **多架构 GNN**: GAT / GraphSAGE / GCN 三种架构可通过参数切换
+- **模型持久化**: `save_model()` / `load_model()` — 训练后保存，推理时直接加载
 - **合规评分**: 9 项央行格式检查 + 内容实质性 + 证据链完整性 + 百分制评分
 - **Messages 总线**: 每个 Agent 追加结构化消息 (`{agent, timestamp, status, summary}`)，可追溯全链路
 
@@ -169,9 +214,10 @@ $ python main.py --demo --n 200
 | 规则引擎 | YAML 配置驱动, 纯函数, 20 条规则 |
 | 记忆 | JSONL 文件记忆库 (案例检索 + 反思注入) |
 | API | FastAPI (`POST /detect` `GET /health` `GET /report/{id}`) |
-| 界面 | Streamlit |
+| 界面 | Streamlit (进度追踪 + 指标卡片 + Agent 流水线可视化) |
 | 数据 | Kaggle PaySim (636 万笔) |
-| 测试 | pytest, 32 用例 |
+| CI/CD | GitHub Actions (pytest + coverage) |
+| 测试 | pytest 110+ 用例 (数据/规则/工作流/GNN/LLM/合规/API) |
 
 ---
 
@@ -195,26 +241,29 @@ $ python main.py --demo --n 200
 │   └── demo_injector.py     # Demo 样本注入
 ├── rules.py                 # 20 条规则 (纯函数)
 ├── rule_engine.py           # 规则编排器
-├── gnn_model.py             # GAT / GraphSAGE / GCN
+├── gnn_model.py             # GAT/SAGE/GCN (继承 nn.Module)
 ├── data_loader.py           # PaySim 数据加载
 ├── evaluate.py              # 评估: 基线 vs 规则 vs GNN
 ├── llm/deepseek_client.py   # DeepSeek API (重试/超时/降级)
-├── memory/chroma_store.py   # 反思记忆
+├── memory/file_store.py      # 反思记忆 (JSONL)
 ├── config/rules/aml_rules.yaml  # 规则参数
-└── tests/                   # 32 个测试
+└── tests/                   # 110+ 测试 (数据/规则/工作流/GNN/LLM/合规/API)
 ```
 
 ---
 
-## 已知限制
+## 已知限制与改进方向
 
-- **数据**: PaySim 为学术数据集，缺少真实 KYC 信息、IP、地理位置等字段。GNN F1 在模拟数据上有效，真实场景需银行数据验证。
-- **规则**: 20 条覆盖主要洗钱模式，银行生产环境通常 100+ 条。
-- **实时性**: 当前为批量检测模式，未接入流处理与告警推送。
-- **GNN 模型**: 当前聚焦节点分类，未引入时序图模型与异构图。
+| 限制 | 现状 | 改进方向 |
+|------|------|----------|
+| 数据 | PaySim 学术数据集，缺 KYC/IP/地理位置 | 接入银行生产数据，增加特征维度 |
+| 规则 | 20 条覆盖主要洗钱模式 | 扩展到 50+ 条，引入规则学习 |
+| 实时性 | 批量检测模式 | 接入 Kafka/Flink 流处理 + 实时告警 |
+| GNN | 节点分类，未引入时序/异构图 | 引入 RGCN/HGT 异构图 + TGN 时序模型 |
+| 记忆 | JSONL 文件存储 | 升级为 ChromaDB/Milvus 向量检索 |
 
 ---
 
 ## License
 
-MIT
+MIT © 2026 Weizikai-1

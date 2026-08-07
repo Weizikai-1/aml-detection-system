@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  streamlit:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    restart: unless-stopped
+
+  cli:
+    build: .
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    command: python main.py --demo --n 500
+    profiles:
+      - cli

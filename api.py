@@ -1,9 +1,10 @@
 """
-AML 反洗钱检测系统 — FastAPI 接口
+AML 反洗钱检测系统 — FastAPI 接口 (async)
 启动: uvicorn api:app --host 0.0.0.0 --port 8000
 """
 import os
 import sys
+import asyncio
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -40,7 +41,7 @@ class DetectResponse(BaseModel):
 
 
 @app.get("/health")
-def health():
+async def health():
     """健康检查"""
     from llm.deepseek_client import DeepSeekClient
     from gnn_model import is_available as gnn_ok
@@ -56,9 +57,9 @@ def health():
 
 
 @app.post("/detect", response_model=DetectResponse)
-def detect(req: DetectRequest):
+async def detect(req: DetectRequest):
     """
-    运行反洗钱检测流水线。
+    运行反洗钱检测流水线 (async — 不阻塞事件循环)。
 
     返回:
       - 数据概览、规则命中摘要、GNN 指标
@@ -68,9 +69,9 @@ def detect(req: DetectRequest):
     state = {"n_samples": req.n_samples, "demo_mode": req.demo_mode, "errors": []}
 
     if _wf is not None:
-        final = _wf.invoke(state)
+        final = await asyncio.to_thread(_wf.invoke, state)
     else:
-        final = run_sequential(state)
+        final = await asyncio.to_thread(run_sequential, state)
 
     ds = final.get("data_summary", {})
     rr = final.get("rule_report", {})
@@ -114,7 +115,7 @@ def detect(req: DetectRequest):
 
 
 @app.get("/report/{report_id}")
-def get_report(report_id: str):
+async def get_report(report_id: str):
     """获取完整的 STR 报告 (从 reports/ 目录读取)"""
     path = os.path.join(os.path.dirname(__file__), "reports", "aml_report.md")
     if os.path.exists(path):

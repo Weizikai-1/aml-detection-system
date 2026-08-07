@@ -1,0 +1,21 @@
+[run]
+source = .
+omit =
+    tests/*
+    app.py
+    main.py
+    evaluate.py
+    utils.py
+    scripts/*
+    .github/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError
+    raise ImportError
+    except ImportError
+
+[html]
+directory = htmlcov

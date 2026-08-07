@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 from graph.state import AMLState
 from llm.deepseek_client import DeepSeekClient
-from memory.chroma_store import memory
+from memory.file_store import memory
 
 log = logging.getLogger("aml.agent.report")
 
@@ -91,8 +91,10 @@ def run(state: AMLState) -> dict:
             lines = []
             for i, r in enumerate(reviews, 1):
                 a = r.get("llm_analysis", {})
+                rules_list = r.get("rules", [r.get("rule", "?")])
+                rule_name = rules_list[0] if isinstance(rules_list, list) and rules_list else str(rules_list)
                 lines.append(
-                    f"{i}. **规则**: {r['rule']} | **风险分**: {r['risk_score']}\n"
+                    f"{i}. **规则**: {rule_name} | **风险分**: {r['risk_score']}\n"
                     f"   - 嫌疑等级: {a.get('suspicion_level', 'N/A')}\n"
                     f"   - 分析: {a.get('reasoning', 'N/A')[:150]}\n"
                     f"   - 洗钱类型: {a.get('typology', 'N/A')}"

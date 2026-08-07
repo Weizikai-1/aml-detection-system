@@ -4,6 +4,7 @@
 """
 import yaml
 import os
+import pandas as pd
 from collections import defaultdict
 from typing import List, Dict
 
@@ -296,7 +297,6 @@ def crypto_pattern(txns: List[dict], cfg=None) -> List[dict]:
 # ============================================================
 def pd_to_seconds(ts) -> float:
     """各种时间格式 → 秒数。PaySim step(小时)自动×3600"""
-    import pandas as pd
     try:
         result = pd.Timestamp(ts).timestamp()
     except Exception:

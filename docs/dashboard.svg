@@ -1,0 +1,193 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="100%" height="auto">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e2a4a"/>
+      <stop offset="100%" stop-color="#1a2540"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="720" height="420" fill="url(#bg)" rx="12"/>
+
+  <!-- Header -->
+  <text x="24" y="38" font-family="system-ui,sans-serif" font-size="18" font-weight="700" fill="#e2e8f0">AML 反洗钱多智能体检测系统</text>
+  <rect x="24" y="48" width="56" height="18" rx="9" fill="#7c3aed" opacity="0.2"/>
+  <text x="34" y="61" font-family="system-ui,sans-serif" font-size="10" fill="#a78bfa">v2.1.0</text>
+  <rect x="88" y="48" width="72" height="18" rx="9" fill="#059669" opacity="0.2"/>
+  <text x="98" y="61" font-family="system-ui,sans-serif" font-size="10" fill="#34d399">CI Passing</text>
+  <circle cx="180" cy="57" r="1.5" fill="#4b5563"/>
+  <text x="190" y="61" font-family="system-ui,sans-serif" font-size="10" fill="#9ca3af">6-Agent 并行协同 | 20条规则 | GNN + LLM</text>
+
+  <!-- Separator -->
+  <line x1="24" y1="75" x2="696" y2="75" stroke="#2d3a5c" stroke-width="1"/>
+
+  <!-- Metric Cards Row -->
+  <g transform="translate(24, 85)">
+    <!-- Card 1: Total Transactions -->
+    <rect x="0" y="0" width="126" height="72" rx="8" fill="url(#cardBg)" stroke="#2d3a5c" stroke-width="1"/>
+    <text x="12" y="22" font-family="system-ui,sans-serif" font-size="11" fill="#9ca3af">总交易</text>
+    <text x="12" y="52" font-family="system-ui,monospace" font-size="24" font-weight="700" fill="#e2e8f0">2,000</text>
+    <rect x="90" y="10" width="26" height="16" rx="4" fill="#2563eb" opacity="0.2"/>
+    <text x="96" y="22" font-family="system-ui,sans-serif" font-size="9" fill="#60a5fa">条</text>
+
+    <!-- Card 2: Rule Hits -->
+    <rect x="138" y="0" width="126" height="72" rx="8" fill="url(#cardBg)" stroke="#2d3a5c" stroke-width="1"/>
+    <text x="12" y="22" font-family="system-ui,sans-serif" font-size="11" fill="#9ca3af">规则命中</text>
+    <text x="12" y="52" font-family="system-ui,monospace" font-size="24" font-weight="700" fill="#f59e0b">112</text>
+    <rect x="78" y="38" width="40" height="14" rx="4" fill="#ef4444" opacity="0.15"/>
+    <text x="82" y="48" font-family="system-ui,sans-serif" font-size="9" fill="#f87171">高:4</text>
+
+    <!-- Card 3: LLM Reviews -->
+    <rect x="276" y="0" width="126" height="72" rx="8" fill="url(#cardBg)" stroke="#2d3a5c" stroke-width="1"/>
+    <text x="12" y="22" font-family="system-ui,sans-serif" font-size="11" fill="#9ca3af">LLM 深审</text>
+    <text x="12" y="52" font-family="system-ui,monospace" font-size="24" font-weight="700" fill="#a78bfa">4</text>
+    <rect x="48" y="10" width="68" height="16" rx="4" fill="#7c3aed" opacity="0.2"/>
+    <text x="54" y="22" font-family="system-ui,sans-serif" font-size="9" fill="#a78bfa">DeepSeek</text>
+
+    <!-- Card 4: GNN F1 -->
+    <rect x="414" y="0" width="126" height="72" rx="8" fill="url(#cardBg)" stroke="#2d3a5c" stroke-width="1"/>
+    <text x="12" y="22" font-family="system-ui,sans-serif" font-size="11" fill="#9ca3af">GNN F1</text>
+    <text x="12" y="52" font-family="system-ui,monospace" font-size="24" font-weight="700" fill="#34d399">0.900</text>
+    <rect x="88" y="10" width="26" height="16" rx="4" fill="#059669" opacity="0.2"/>
+    <text x="93" y="22" font-family="system-ui,sans-serif" font-size="9" fill="#34d399">GAT</text>
+
+    <!-- Card 5: Compliance -->
+    <rect x="552" y="0" width="126" height="72" rx="8" fill="url(#cardBg)" stroke="#2d3a5c" stroke-width="1"/>
+    <text x="12" y="22" font-family="system-ui,sans-serif" font-size="11" fill="#9ca3af">合规评分</text>
+    <text x="12" y="52" font-family="system-ui,monospace" font-size="24" font-weight="700" fill="#34d399">100</text>
+    <rect x="60" y="38" width="56" height="14" rx="4" fill="#059669" opacity="0.15"/>
+    <text x="64" y="48" font-family="system-ui,sans-serif" font-size="9" fill="#34d399">/100 ✓</text>
+  </g>
+
+  <!-- Agent Pipeline -->
+  <text x="24" y="190" font-family="system-ui,sans-serif" font-size="12" font-weight="600" fill="#9ca3af">Agent 执行流水线</text>
+
+  <g transform="translate(24, 200)">
+    <!-- Node 1: Data Preprocess -->
+    <rect x="0" y="0" width="100" height="48" rx="8" fill="#1e2a4a" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="50" y="20" font-family="system-ui,sans-serif" font-size="10" fill="#e2e8f0" text-anchor="middle">数据预处理</text>
+    <text x="50" y="36" font-family="system-ui,sans-serif" font-size="9" fill="#60a5fa" text-anchor="middle">2,000 条 ✓</text>
+
+    <!-- Arrow 1→2 -->
+    <line x1="100" y1="24" x2="120" y2="24" stroke="#4b5563" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <line x1="100" y1="24" x2="120" y2="-8" stroke="#4b5563" stroke-width="1.5" marker-end="url(#arrow2)"/>
+
+    <!-- Node 2: Rule Engine -->
+    <rect x="122" y="-8" width="96" height="42" rx="8" fill="#1e2a4a" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="170" y="10" font-family="system-ui,sans-serif" font-size="10" fill="#e2e8f0" text-anchor="middle">规则引擎</text>
+    <text x="170" y="26" font-family="system-ui,sans-serif" font-size="9" fill="#f59e0b" text-anchor="middle">命中 112 笔</text>
+
+    <!-- Merge point -->
+    <text x="230" y="24" font-family="system-ui,sans-serif" font-size="8" fill="#6b7280" text-anchor="middle">同步</text>
+
+    <!-- Node 3: GNN -->
+    <rect x="122" y="38" width="96" height="42" rx="8" fill="#1e2a4a" stroke="#34d399" stroke-width="1.5"/>
+    <text x="170" y="56" font-family="system-ui,sans-serif" font-size="10" fill="#e2e8f0" text-anchor="middle">GNN 图分析</text>
+    <text x="170" y="72" font-family="system-ui,sans-serif" font-size="9" fill="#34d399" text-anchor="middle">F1=0.900</text>
+
+    <!-- Arrow 2→3 (merge) -->
+    <line x1="218" y1="13" x2="248" y2="24" stroke="#4b5563" stroke-width="1.5"/>
+    <line x1="218" y1="59" x2="248" y2="24" stroke="#4b5563" stroke-width="1.5"/>
+
+    <!-- Node 4: Merge Decision -->
+    <rect x="250" y="8" width="72" height="32" rx="16" fill="#1e2a4a" stroke="#2563eb" stroke-width="1"/>
+    <text x="286" y="28" font-family="system-ui,sans-serif" font-size="9" fill="#9ca3af" text-anchor="middle">条件路由</text>
+
+    <!-- Arrow decision→LLM -->
+    <line x1="322" y1="16" x2="348" y2="-6" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow3)"/>
+
+    <!-- Node 5: LLM -->
+    <rect x="350" y="-16" width="90" height="42" rx="8" fill="#1e2a4a" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="395" y="2" font-family="system-ui,sans-serif" font-size="10" fill="#e2e8f0" text-anchor="middle">LLM 深审</text>
+    <text x="395" y="18" font-family="system-ui,sans-serif" font-size="9" fill="#a78bfa" text-anchor="middle">4 笔高风险</text>
+
+    <!-- Arrow LLM→Report -->
+    <line x1="440" y1="5" x2="468" y2="8" stroke="#4b5563" stroke-width="1.5"/>
+
+    <!-- Arrow decision→Report (direct) -->
+    <line x1="322" y1="32" x2="348" y2="58" stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,4"/>
+
+    <!-- Node 6: Report -->
+    <rect x="470" y="0" width="90" height="48" rx="8" fill="#1e2a4a" stroke="#34d399" stroke-width="1.5"/>
+    <text x="515" y="20" font-family="system-ui,sans-serif" font-size="10" fill="#e2e8f0" text-anchor="middle">报告生成</text>
+    <text x="515" y="36" font-family="system-ui,sans-serif" font-size="9" fill="#34d399" text-anchor="middle">STR 2,414 字</text>
+
+    <!-- Arrow Report→Compliance -->
+    <line x1="560" y1="24" x2="590" y2="24" stroke="#4b5563" stroke-width="1.5"/>
+
+    <!-- Node 7: Compliance -->
+    <rect x="592" y="0" width="90" height="48" rx="8" fill="#1e2a4a" stroke="#059669" stroke-width="1.5"/>
+    <text x="637" y="20" font-family="system-ui,sans-serif" font-size="10" fill="#e2e8f0" text-anchor="middle">合规审核</text>
+    <text x="637" y="36" font-family="system-ui,sans-serif" font-size="9" fill="#34d399" text-anchor="middle">100/100 ✓</text>
+  </g>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="#4b5563"/>
+    </marker>
+    <marker id="arrow2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="#4b5563"/>
+    </marker>
+    <marker id="arrow3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="#f59e0b"/>
+    </marker>
+  </defs>
+
+  <!-- Separator -->
+  <line x1="24" y1="295" x2="696" y2="295" stroke="#2d3a5c" stroke-width="1"/>
+
+  <!-- Tech Stack Tags -->
+  <text x="24" y="320" font-family="system-ui,sans-serif" font-size="11" fill="#6b7280">技术栈</text>
+  <g transform="translate(24, 328)">
+    <rect x="0" y="0" width="58" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="29" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#60a5fa" text-anchor="middle">LangGraph</text>
+
+    <rect x="64" y="0" width="48" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="88" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#a78bfa" text-anchor="middle">DeepSeek</text>
+
+    <rect x="118" y="0" width="76" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="156" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#34d399" text-anchor="middle">PyTorch Geometric</text>
+
+    <rect x="200" y="0" width="42" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="221" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#f59e0b" text-anchor="middle">FastAPI</text>
+
+    <rect x="248" y="0" width="44" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="270" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#e2e8f0" text-anchor="middle">Streamlit</text>
+
+    <rect x="298" y="0" width="38" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="317" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#e2e8f0" text-anchor="middle">Docker</text>
+
+    <rect x="342" y="0" width="74" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="379" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#e2e8f0" text-anchor="middle">GitHub Actions</text>
+
+    <rect x="422" y="0" width="50" height="20" rx="4" fill="#1e2a4a" stroke="#2d3a5c" stroke-width="0.5"/>
+    <text x="447" y="14" font-family="system-ui,sans-serif" font-size="9" fill="#e2e8f0" text-anchor="middle">110 Tests</text>
+  </g>
+
+  <!-- Stats Footer -->
+  <line x1="24" y1="370" x2="696" y2="370" stroke="#2d3a5c" stroke-width="1"/>
+  <g transform="translate(24, 385)">
+    <text x="0" y="14" font-family="system-ui,sans-serif" font-size="10" fill="#6b7280">110 测试 100% 通过</text>
+    <circle cx="130" cy="9" r="1.5" fill="#4b5563"/>
+    <text x="140" y="14" font-family="system-ui,sans-serif" font-size="10" fill="#6b7280">核心覆盖率 88%</text>
+    <circle cx="254" cy="9" r="1.5" fill="#4b5563"/>
+    <text x="264" y="14" font-family="system-ui,sans-serif" font-size="10" fill="#6b7280">Docker 容器化</text>
+    <circle cx="368" cy="9" r="1.5" fill="#4b5563"/>
+    <text x="378" y="14" font-family="system-ui,sans-serif" font-size="10" fill="#6b7280">Kaggle PaySim 636万笔</text>
+    <circle cx="526" cy="9" r="1.5" fill="#4b5563"/>
+    <text x="536" y="14" font-family="system-ui,sans-serif" font-size="10" fill="#6b7280">MIT License</text>
+  </g>
+</svg>

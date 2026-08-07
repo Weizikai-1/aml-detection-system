@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 import pandas as pd
 from graph.state import AMLState
+from settings import GNN as GNN_CFG
 
 log = logging.getLogger("aml.agent.graph")
 
@@ -35,7 +36,10 @@ def run(state: AMLState) -> dict:
 
         df = pd.DataFrame(transactions)
         data = build_graph(df)
-        result = train_and_eval(data, epochs=60)
+        result = train_and_eval(data,
+            epochs=GNN_CFG.get("epochs", 100),
+            lr=GNN_CFG.get("lr", 0.01),
+            model_type=GNN_CFG.get("model", "gat"))
 
         updates["gnn_enabled"] = True
         updates["gnn_report"] = {

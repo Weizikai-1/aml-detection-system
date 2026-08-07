@@ -1,9 +1,11 @@
 """
 GNN 图神经网络模型 — 反洗钱节点分类
-支持 GAT / GraphSAGE / GCN 三种架构，延迟导入避免硬依赖
+支持 GAT / GraphSAGE / GCN 三种架构
 
-设计: 不在模块级判断依赖可用性，而是在每个函数入口处延迟导入。
-      这样无需 if/else stub 块，代码无重复，调用时的 ImportError 自带说明。
+设计:
+  - FraudGNN 继承 torch.nn.Module（标准 PyTorch 模式）
+  - 支持 model.to(device) / torch.save / model.train() / model.eval() 等标准 API
+  - 延迟导入：torch_geometric 在首次实例化时才加载，模块可正常 import
 """
 import logging
 import numpy as np
@@ -13,48 +15,69 @@ log = logging.getLogger("aml.gnn")
 
 _IMPORT_ERR = "需要安装 PyTorch Geometric: pip install torch torch-geometric"
 
+# ---- 条件继承：torch 不可用时退化为 object ----
+try:
+    import torch as _torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _torch = None           # type: ignore
+    _TORCH_AVAILABLE = False
+
 
 def is_available() -> bool:
     """检测 torch + torch-geometric 是否可用"""
+    if not _TORCH_AVAILABLE:
+        return False
     try:
-        import torch
-        import torch_geometric
+        import torch_geometric            # noqa: F401
         return True
     except ImportError:
         return False
 
 
 def _require_torch():
-    """延迟导入 torch，不可用时抛出清晰的 ImportError"""
+    """延迟导入 torch / torch-geometric，不可用时抛出清晰的 ImportError"""
+    if not _TORCH_AVAILABLE:
+        raise ImportError(_IMPORT_ERR)
     try:
-        import torch
         import torch.nn.functional as F
         from torch_geometric.nn import GATConv, SAGEConv, GCNConv
         from torch_geometric.data import Data
-        return torch, F, GATConv, SAGEConv, GCNConv, Data
+        return _torch, F, GATConv, SAGEConv, GCNConv, Data
     except ImportError as e:
         raise ImportError(f"{_IMPORT_ERR}\n原始错误: {e}")
 
 
 # ============================================================
-# FraudGNN — 图神经网络模型
+# FraudGNN — 图神经网络模型 (继承 nn.Module)
 # ============================================================
 
-class FraudGNN:
+_ModuleBase = _torch.nn.Module if _TORCH_AVAILABLE else object
+
+
+class FraudGNN(_ModuleBase):
     """
     图神经网络 — GAT / GraphSAGE / GCN 三架构
 
-    使用方式:
-        model = FraudGNN(in_dim=8, model_type="gat")   # 默认 GAT
-        model = FraudGNN(in_dim=8, model_type="sage")  # GraphSAGE
-        model = FraudGNN(in_dim=8, model_type="gcn")   # GCN
+    用法:
+        model = FraudGNN(in_dim=8, model_type="gat")    # GAT (默认)
+        model = FraudGNN(in_dim=8, model_type="sage")   # GraphSAGE
+        model = FraudGNN(in_dim=8, model_type="gcn")    # GCN
+
+        # 标准 PyTorch 操作全部支持:
+        model.to("cuda")
+        model.train() / model.eval()
+        torch.save(model.state_dict(), "model.pt")
+        model.load_state_dict(torch.load("model.pt"))
     """
 
     def __init__(self, in_dim=8, hidden=64, dropout=0.5, heads=4,
                  model_type="gat"):
-        torch, F, GATConv, SAGEConv, GCNConv, _Data = _require_torch()
-        self._torch = torch
-        self._F = F
+        if not _TORCH_AVAILABLE:
+            raise ImportError(_IMPORT_ERR)
+        super().__init__()
+
+        _torch_mod, F, GATConv, SAGEConv, GCNConv, _Data = _require_torch()
         self.model_type = model_type
 
         if model_type == "sage":
@@ -67,11 +90,11 @@ class FraudGNN:
             self.conv1 = GATConv(in_dim, hidden, heads=heads, dropout=dropout)
             self.conv2 = GATConv(hidden * heads, hidden, heads=1,
                                  concat=False, dropout=dropout)
-        self.lin = torch.nn.Linear(hidden, 1)
+        self.lin = _torch.nn.Linear(hidden, 1)
         self.dropout = dropout
 
     def forward(self, data):
-        F = self._F
+        _, F, _, _, _, _ = _require_torch()
         x, edge_index = data.x, data.edge_index
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = F.elu(self.conv1(x, edge_index))
@@ -79,39 +102,9 @@ class FraudGNN:
         x = self.conv2(x, edge_index)
         return self.lin(x)
 
-    def parameters(self):
-        """收集所有子模块参数"""
-        params = list(self.lin.parameters())
-        for name in ['conv1', 'conv2']:
-            if hasattr(self, name):
-                params.extend(getattr(self, name).parameters())
-        return params
-
-    def state_dict(self):
-        return {k: v for module in [self.conv1, self.conv2, self.lin]
-                for k, v in module.state_dict().items()}
-
-    def load_state_dict(self, sd):
-        self.conv1.load_state_dict({k: v for k, v in sd.items() if k.startswith('conv1')})
-        self.conv2.load_state_dict({k: v for k, v in sd.items() if k.startswith('conv2')})
-        self.lin.load_state_dict({k: v for k, v in sd.items() if k.startswith('lin')})
-
-    def train(self, mode=True):
-        torch, *_ = _require_torch()
-        for m in [self.conv1, self.conv2, self.lin]:
-            m.train(mode)
-        return self
-
-    def eval(self):
-        return self.train(False)
-
-    @property
-    def training(self):
-        return self.conv1.training
-
 
 # ============================================================
-# 图构建 + 训练 + 预测
+# 图构建 + 训练 + 预测 + 持久化
 # ============================================================
 
 def build_graph(df: pd.DataFrame):
@@ -203,14 +196,14 @@ def train_and_eval(data, epochs=100, lr=0.01, model_type="gat") -> dict:
     for epoch in range(epochs):
         model.train()
         optimizer.zero_grad()
-        out = model.forward(data).squeeze(-1)
+        out = model(data).squeeze(-1)
         loss = criterion(out[data.train_mask], data.y[data.train_mask].float())
         loss.backward()
         optimizer.step()
 
         model.eval()
         with torch.no_grad():
-            out = model.forward(data).squeeze(-1)
+            out = model(data).squeeze(-1)
             prob = torch.sigmoid(out[data.test_mask])
             metrics = _calc_node_metrics(prob, data.y[data.test_mask])
             if metrics["f1"] > best_f1:
@@ -225,11 +218,28 @@ def train_and_eval(data, epochs=100, lr=0.01, model_type="gat") -> dict:
         model.load_state_dict(best_state)
         model.eval()
         with torch.no_grad():
-            prob = torch.sigmoid(model.forward(data).squeeze(-1))
+            prob = torch.sigmoid(model(data).squeeze(-1))
             final = _calc_node_metrics(prob[data.test_mask], data.y[data.test_mask])
 
     return {"node_f1": final["f1"], "node_precision": final["precision"],
             "node_recall": final["recall"], "best_f1": best_f1, "model": model}
+
+
+def save_model(model: FraudGNN, path: str):
+    """保存模型到磁盘（标准 torch.save）"""
+    torch, *_ = _require_torch()
+    torch.save(model.state_dict(), path)
+    log.info(f"模型已保存: {path}")
+
+
+def load_model(path: str, in_dim=8, model_type="gat") -> FraudGNN:
+    """从磁盘加载模型"""
+    torch, *_ = _require_torch()
+    model = FraudGNN(in_dim=in_dim, model_type=model_type)
+    model.load_state_dict(torch.load(path, weights_only=True))
+    model.eval()
+    log.info(f"模型已加载: {path}")
+    return model
 
 
 def _calc_node_metrics(prob, labels, threshold=0.5) -> dict:
@@ -249,13 +259,13 @@ def predict_transactions(model, data, df: pd.DataFrame) -> np.ndarray:
     torch, _F, _GAT, _SAGE, _GCN, _Data = _require_torch()
     model.eval()
     with torch.no_grad():
-        prob = torch.sigmoid(model.forward(data).squeeze()).numpy()
+        prob = torch.sigmoid(model(data).squeeze()).numpy()
     id2idx = data.id2idx
     preds = np.zeros(len(df), dtype=int)
     for i, (_, row) in enumerate(df.iterrows()):
         s = id2idx.get(str(row["nameOrig"]))
         d = id2idx.get(str(row["nameDest"]))
         ps = prob[s] if s is not None else 0
-        pd_ = prob[d] if d is not None else 0
-        preds[i] = 1 if (ps > 0.5 or pd_ > 0.5) else 0
+        prob_d = prob[d] if d is not None else 0
+        preds[i] = 1 if (ps > 0.5 or prob_d > 0.5) else 0
     return preds

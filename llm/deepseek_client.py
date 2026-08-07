@@ -22,7 +22,7 @@ class DeepSeekClient:
     def __init__(self, api_key: str = None, model: str = "deepseek-chat"):
         self._api_key = api_key
         self.model = model
-        self.base_url = "https://api.deepseek.com/v1"
+        self.base_url = settings.LLM.get("base_url", "https://api.deepseek.com/v1")
         self._last_call = 0.0
 
     @property

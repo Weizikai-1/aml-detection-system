@@ -8,14 +8,15 @@ import numpy as np
 import pandas as pd
 from settings import PAYSIM_CSV, PAYSIM_SAMPLE, DATA_SOURCE, RANDOM_SEED
 
-np.random.seed(RANDOM_SEED)
-
 
 def load_data(n_rows: int = 5000) -> pd.DataFrame:
     """统一数据入口：真实数据优先，模拟数据降级"""
+    np.random.seed(RANDOM_SEED)  # 确保可复现，仅在此处设置
     if os.path.exists(PAYSIM_CSV):
         return _load_real(n_rows)
     return generate_synthetic(n_rows)
+
+
 def get_source_label() -> str:
     """返回当前数据来源（诚实标注）"""
     if os.path.exists(PAYSIM_CSV) or os.path.exists(PAYSIM_SAMPLE):

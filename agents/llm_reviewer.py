@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 from graph.state import AMLState
 from llm.deepseek_client import DeepSeekClient
-from memory.chroma_store import memory
+from memory.file_store import memory
 
 log = logging.getLogger("aml.agent.llm")
 
@@ -49,7 +49,9 @@ def run(state: AMLState) -> dict:
         try:
             txn = h.get("transaction", {})
             evidence = h.get("evidence", [])
-            rule = h.get("rule", "unknown")
+            rule = h.get("rules", ["unknown"])
+            if isinstance(rule, list):
+                rule = rule[0]  # rule_engine 合并后 rules 是列表，取第一个
             risk = h.get("risk_score", 0)
 
             similar_cases = memory.find_similar(rule, risk, n=2)

@@ -212,7 +212,7 @@ if run_btn:
             a = r.get("llm_analysis", {})
             with st.expander(
                 f"{i}. [{a.get('suspicion_level', '?').upper()}] "
-                f"{r['rule']} (风险分: {r['risk_score']})",
+                f"{r.get('rule', '?')} (风险分: {r.get('risk_score', 0)})",
                 expanded=(i <= 3),
             ):
                 st.markdown(f"**嫌疑等级**: `{a.get('suspicion_level', 'N/A')}`")

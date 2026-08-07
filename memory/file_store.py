@@ -1,6 +1,6 @@
 """
-反思记忆 — ChromaDB 向量存储
-存储历史检测案例，支持相似案例检索
+文件记忆库 — JSONL 本地存储
+存储历史检测案例，支持按规则名 + 风险分检索相似案例
 """
 import os
 import json
@@ -13,7 +13,7 @@ MEMORY_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "m
 
 
 class MemoryStore:
-    """简易文件记忆库 — 无需 ChromaDB 依赖即可运行"""
+    """JSONL 文件记忆库 — 零额外依赖"""
 
     def __init__(self):
         os.makedirs(MEMORY_DIR, exist_ok=True)

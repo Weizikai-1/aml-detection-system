@@ -1,8 +1,9 @@
 """
-规则引擎编排器 — 调度10条规则，合并去重，排序输出
+规则引擎编排器 — 调度20条规则，合并去重，排序输出
 """
 from typing import List, Dict
 from rules import ALL_RULES, CORE_RULES
+from settings import RISK as RISK_CFG
 import logging
 
 log = logging.getLogger("aml.engine")
@@ -55,13 +56,15 @@ def _merge_and_rank(results: List[dict]) -> List[dict]:
 
 
 def summary(hits: List[dict]) -> dict:
-    """生成命中摘要"""
+    """生成命中摘要（阈值由 settings.RISK 控制）"""
+    high_threshold = RISK_CFG.get("levels", {}).get("high", 70)
+    medium_threshold = RISK_CFG.get("levels", {}).get("medium", 50)
     return {
         "total_hits": len(hits),
         "by_rule": _count_by_rule(hits),
-        "high_risk": len([h for h in hits if h["risk_score"] >= 70]),
-        "medium_risk": len([h for h in hits if 50 <= h["risk_score"] < 70]),
-        "low_risk": len([h for h in hits if h["risk_score"] < 50]),
+        "high_risk": len([h for h in hits if h["risk_score"] >= high_threshold]),
+        "medium_risk": len([h for h in hits if medium_threshold <= h["risk_score"] < high_threshold]),
+        "low_risk": len([h for h in hits if h["risk_score"] < medium_threshold]),
     }
 
 

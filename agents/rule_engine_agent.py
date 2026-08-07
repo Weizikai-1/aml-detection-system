@@ -1,6 +1,6 @@
 """
 规则引擎 Agent
-职责: 运行 10 条反洗钱规则，筛选高风险交易
+职责: 运行 20 条反洗钱规则，筛选高风险交易
 
 产出:
   rule_report: {
@@ -14,8 +14,9 @@
 import logging
 from datetime import datetime
 from graph.state import AMLState
-from rules import ALL_RULES, CORE_RULES
+from rules import ALL_RULES
 from rule_engine import run_engine, summary as rule_summary
+from settings import RISK as RISK_CFG
 
 log = logging.getLogger("aml.agent.rules")
 
@@ -32,7 +33,8 @@ def run(state: AMLState) -> dict:
     try:
         hits = run_engine(txns)
         info = rule_summary(hits)
-        high_risk = [h for h in hits if h["risk_score"] >= 70]
+        high_threshold = RISK_CFG.get("levels", {}).get("high", 70)
+        high_risk = [h for h in hits if h["risk_score"] >= high_threshold]
 
         updates["rule_report"] = {
             "hits": hits,
